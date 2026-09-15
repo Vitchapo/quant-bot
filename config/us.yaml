@@ -1,0 +1,168 @@
+# ---------------------------------------------------------------------------
+# Univers : actions americaines (S&P 500)
+# ---------------------------------------------------------------------------
+name: us
+
+universe:
+  source: sp500          # sp500 | static | file
+  # SPY, et non "^GSPC" : les cours des titres sont telecharges DIVIDENDES
+  # REINVESTIS (auto_adjust). Comparer une strategie dividendes reinvestis a
+  # un indice de PRIX offre ~2 points de rendement par an a la strategie, sans
+  # que rien ne le signale. SPY est un ETF : sa serie ajustee est bien une
+  # serie total return.
+  benchmark: "SPY"
+  min_tickers: 400       # en dessous, ce n'est pas le S&P 500 : on refuse de demarrer
+  allow_fallback: false  # true = accepte la liste statique de repli (PAS le S&P 500)
+  max_tickers: null      # null = tout l'univers ; un entier pour tester vite
+
+data:
+  start: "2005-01-01"
+  end: null              # null = aujourd'hui
+  provider: yfinance     # yfinance | stooq
+  cache_dir: "data/prices/us"
+  min_history_days: 300  # un titre avec moins d'historique est ignore
+  stale_days: 10         # sans cours reel pendant N seances -> titre intraitable
+  currency: USD
+
+# ---------------------------------------------------------------------------
+# Facteurs : chacun est transforme en z-score cross-sectionnel (compare aux
+# autres titres le meme jour), puis combine en un score unique.
+# ---------------------------------------------------------------------------
+factors:
+  momentum:
+    weight: 1.0
+    lookback: 252        # ~12 mois de bourse
+    skip: 21             # on saute le dernier mois (effet de retournement CT)
+  low_volatility:
+    weight: 0.5          # poids positif = on PREFERE la faible volatilite
+    window: 63           # ~3 mois
+  trend:
+    weight: 0.5
+    window: 200          # ecart au cours moyen 200 jours
+  winsorize: 3.0         # on borne les z-scores a +/- 3 ecarts-types
+  min_valid_factors: 2   # un titre doit avoir au moins 2 facteurs calculables
+
+# ---------------------------------------------------------------------------
+# Filtre de regime : on ne s'expose que si le marche est en tendance haussiere.
+# ---------------------------------------------------------------------------
+regime:
+  enabled: true
+  ma_window: 200
+  cash_weight_when_off: 1.0   # 1.0 = 100% cash quand le filtre est negatif
+
+# ---------------------------------------------------------------------------
+# Portefeuille
+# ---------------------------------------------------------------------------
+portfolio:
+  top_n: 20              # nombre de lignes en portefeuille
+  weighting: inv_vol     # equal | inv_vol (ponderation inverse a la volatilite)
+  max_weight: 0.10       # aucune ligne ne depasse 10% du portefeuille
+  vol_window: 63
+
+  # Pilotage de la volatilite (desactive par defaut).
+  #
+  # Ajuste l'EXPOSITION TOTALE pour viser une volatilite constante, au lieu de
+  # la subir : elle flotte aujourd'hui entre 10 % et 40 % selon les periodes.
+  # Deux faits, exterieurs a ces donnees, le justifient : la volatilite est
+  # persistante (donc previsible, contrairement au rendement), et les periodes
+  # tres volatiles rapportent en moyenne MOINS, pas plus.
+  #
+  # exposition_max > 1.0 signifie EMPRUNTER. Le backtest ne facture aucun
+  # interet sur l'argent emprunte : au-dessus de 1.0, tout resultat est
+  # optimiste d'un cout qui n'est pas modelise. Ne le change qu'en le sachant.
+  volatilite:
+    active: false
+    cible: 0.12           # volatilite annualisee visee
+    fenetre: 63           # seances servant a estimer la covariance
+    min_obs: 40           # sous ce nombre d'observations, pas de pilotage
+    exposition_min: 0.10
+    exposition_max: 1.00  # 1.0 = jamais de levier
+
+  # Contrainte de correlation a la SELECTION (desactivee par defaut).
+  #
+  # Mesure sur l'univers reel : les 20 lignes retenues par le score affichent
+  # une correlation moyenne de 0,21 et une volatilite de 35 %, contre 0,12 et
+  # 14 % pour 20 titres tires au hasard - 100e percentile sur 400 tirages.
+  # Vingt lignes qui se comportent comme quatre. La ponderation inverse-vol
+  # n'y peut rien : elle agit APRES la selection.
+  #
+  # active: true fait descendre le classement en ecartant les candidats trop
+  # correles a ceux deja retenus. Le classement du score reste prioritaire :
+  # on ne prend jamais un moins bon score si un meilleur passe la contrainte.
+  diversification:
+    active: false
+    correlation_max: 0.35   # correlation moyenne max avec les titres deja retenus
+    fenetre: 252          # seances utilisees pour estimer les correlations
+    min_obs: 60           # sous ce nombre d'observations, le titre n'est pas contraint
+    candidats: 3.0        # vivier = top_n x ce facteur (1.0 = aucun arbitrage possible)
+
+# ---------------------------------------------------------------------------
+# Execution et frais. Ces chiffres sont VOLONTAIREMENT conservateurs :
+# sous-estimer les frais est la premiere cause de backtests trompeurs.
+# ---------------------------------------------------------------------------
+execution:
+  rebalance: monthly     # monthly | weekly | quarterly
+  execution_lag: 1       # jours de bourse entre le signal et l'execution
+  commission_bps: 5.0    # 0.05% par transaction (achat ou vente)
+  slippage_bps: 5.0      # 0.05% d'ecart de prix subi
+  delisting_haircut_bps: 0.0  # decote appliquee a une position soldee pour
+                              # cause de radiation. 0 = on suppose la vente
+                              # au dernier cours connu, hypothese OPTIMISTE
+                              # en cas de faillite. Mets 2000 (soit -20%)
+                              # pour tester la sensibilite du resultat.
+  initial_capital: 100000.0
+  risk_free_annual: 0.02 # remuneration du cash
+
+# ---------------------------------------------------------------------------
+# Validation walk-forward : on optimise sur une fenetre, on teste sur la
+# suivante, jamais vue. C'est le seul chiffre a peu pres honnete.
+# ---------------------------------------------------------------------------
+walk_forward:
+  train_years: 4
+  test_years: 1
+  grid:                    # chemins COMPLETS, valides au chargement
+    portfolio.top_n: [10, 20, 30]
+    factors.momentum.lookback: [126, 252]
+    regime.ma_window: [150, 200]
+  objective: calmar      # sharpe | calmar | cagr
+
+# ---------------------------------------------------------------------------
+# Courtier. Tout est en SIMULATION par defaut : `allow_live` est le premier des
+# trois verrous a ouvrir pour toucher a de l'argent reel (les deux autres sont
+# la variable d'environnement QUANTBOT_LIVE et l'option --reel).
+# ---------------------------------------------------------------------------
+broker:
+  provider: alpaca
+  allow_live: false            # VERROU 1/3. Ne l'ouvre qu'en sachant pourquoi.
+  fractionnaire: true          # Alpaca accepte les fractions de titre
+  # Seuil en dessous duquel un ajustement de position est ignore. Il DOIT
+  # suivre la taille du compte : 25 USD, c'est 2,5 % d'un compte de 1000 USD
+  # et 0,025 % d'un compte de 100 000 USD. Un seuil absolu ne peut pas
+  # convenir aux deux. On prend donc le plus grand des deux, le pourcentage
+  # servant de regle et le montant absolu de plancher (minimum du courtier).
+  min_order_pct: 0.0025        # 0,25 % de la valeur du compte
+  min_order_notional: 25.0     # plancher absolu
+  max_order_pct: 0.15          # aucun ordre ne depasse 15% de la valeur du compte
+  max_echange_par_seance: 2.0  # 2.0 = tout vendre PUIS tout racheter, le maximum
+                               # legitime. Au-dela, c'est forcement un bug de
+                               # calcul : le script refuse et n'envoie rien.
+
+# ---------------------------------------------------------------------------
+# Mode "defi" : garde-fous de perte au format des prop firms.
+#
+# Ce ne sont pas des signaux, ce sont des INTERRUPTEURS. Ils n'influencent
+# jamais le choix des titres : ils empechent seulement d'envoyer des ordres
+# quand une limite de perte est franchie.
+#
+# Les seuils sont volontairement SOUS ceux du contrat : 4 % quand le defi dit
+# 5 %, 8 % quand il dit 10 %. Un garde-fou qui se declenche pile a la limite
+# ne sert a rien - entre la decision du bot et l'execution, le marche bouge.
+#
+# "Limites du defi" est un controle BLOQUANT que `forcer` ne leve pas :
+# aucune urgence ne justifie de passer outre une limite de perte.
+# ---------------------------------------------------------------------------
+defi:
+  active: false
+  perte_jour_max: 0.04      # contrat typique : 5 %
+  perte_totale_max: 0.08    # contrat typique : 10 %, mesure depuis le plus haut
+  objectif: 0.10            # cible de gain, pour le suivi

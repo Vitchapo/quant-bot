@@ -1,0 +1,11 @@
+data/
+reports/
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+
+# Identifiants du courtier : ne doivent JAMAIS entrer dans le depot.
+secrets/
+*.env
+.env

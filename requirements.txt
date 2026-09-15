@@ -1,0 +1,30 @@
+# ---------------------------------------------------------------------------
+# Dependances obligatoires
+# ---------------------------------------------------------------------------
+pandas>=2.0
+numpy>=1.24
+pyarrow>=12.0          # stockage Parquet
+PyYAML>=6.0
+
+# Donnees de marche
+yfinance>=0.2.40       # source principale (Yahoo Finance, non officielle)
+requests>=2.31         # source de secours (Stooq)
+lxml>=4.9              # lecture des constituants S&P 500 sur Wikipedia
+
+# Analyse / rapport
+matplotlib>=3.7
+
+# Tests
+pytest>=7.4
+
+# ---------------------------------------------------------------------------
+# Optionnel : DuckDB permet d'interroger les fichiers Parquet du cache en SQL
+# sans rien importer, pratique pour explorer les donnees a la main. Le projet
+# NE L'IMPORTE JAMAIS et fonctionne parfaitement sans.
+#
+# Sous Windows avec Python 3.8, duckdb n'a pas de version precompilee et pip
+# essaie de le compiler, ce qui echoue sans les outils Visual C++. Ne
+# l'installe que si tu en as l'usage :
+#
+#     pip install duckdb
+# ---------------------------------------------------------------------------

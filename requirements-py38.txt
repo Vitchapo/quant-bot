@@ -1,0 +1,26 @@
+# ---------------------------------------------------------------------------
+# Versions epinglees pour Python 3.8 UNIQUEMENT.
+#
+# Python 3.8 n'est plus maintenu depuis octobre 2024 et l'ecosysteme
+# scientifique l'a abandonne. Le projet y fonctionne (les 66 tests passent,
+# aux memes chiffres a la decimale pres qu'en 3.11), mais tu restes bloque sur
+# des versions anciennes, et surtout sur un yfinance fige : comme Yahoo change
+# regulierement son interface non officielle, une version figee finit par ne
+# plus telecharger. La bonne solution reste d'installer Python 3.11 ou 3.12.
+#
+#     pip install -r requirements-py38.txt
+# ---------------------------------------------------------------------------
+pandas==2.0.3
+numpy==1.24.4
+pyarrow==17.0.0
+PyYAML==6.0.2
+matplotlib==3.7.5
+requests==2.32.3
+lxml==5.3.0
+pytest==8.3.5
+
+# yfinance 0.2.65 fonctionne sous 3.8 A CONDITION de retrograder
+# `multitasking` : sa version recente utilise la syntaxe `type[X]`,
+# introduite en Python 3.9, et fait echouer le simple import de yfinance.
+multitasking==0.0.11
+yfinance==0.2.65
