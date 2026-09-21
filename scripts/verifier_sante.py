@@ -160,7 +160,12 @@ def main() -> int:
             print("\n  [courtier]  injoignable : %s" % exc)
 
     # -- verdict -----------------------------------------------------------
-    b = surveillance.bilan(etat, reconciliation, incomplet)
+    # L'etat du coupe-circuit journalier : une tache qui s'execute a l'heure
+    # contre un terminal absent a l'air vivante vue du planificateur. Elle
+    # doit remonter ici, pas seulement dans un fichier que personne n'ouvre.
+    etat_cc = surveillance.lire_etat(Path("data/coupe_circuit_etat.json"))
+    b = surveillance.bilan(etat, reconciliation, incomplet,
+                           etat_coupe_circuit=etat_cc)
     print("\n" + "-" * 68)
     print("  VERDICT : %s  %s" % (SYMBOLES[b["niveau"]], b["resume"]))
     for message in b["alertes"][1:] + b["attentions"]:

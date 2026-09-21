@@ -816,6 +816,22 @@ Dans l'ordre où ça vaut le coup :
    place la stratégie sous la médiane des tirages, les étapes suivantes n'ont
    pas d'objet : il n'y a rien à valider, rien à paper-trader, rien à
    apprendre. Cette étape coûte deux minutes et fait gagner des mois.
+
+   > **FAIT le 21 septembre 2026, sur les 505 séries réelles. Résultat : non.**
+   > IC du composite **t = −0,51** (barre fixée à 2), profil de déciles
+   > **décroissant** (les pires scores battent les meilleurs de 0,26 %/mois),
+   > **le score inversé rapporte 1,69 point de plus**, et le null aléatoire
+   > donne le même verdict au score et à son inverse — il mesure donc la
+   > mécanique de construction, pas le signal. L'univers coûte par ailleurs
+   > **13,2 points de rendement annuel** de biais du survivant.
+   >
+   > Ce qui reste et qui est réel : le filtre de régime, qui divise presque par
+   > deux la perte maximale (−29,6 % contre −51,6 %). C'est une couverture de
+   > marché, pas un classement de titres.
+   >
+   > **Les étapes 1 à 4 ci-dessous sont donc sans objet en l'état.** Détail
+   > complet des cinq mesures, avec les commandes pour les rejouer :
+   > [`docs/verdict_edge_2026-09-21.md`](docs/verdict_edge_2026-09-21.md).
 1. **Faire tourner le walk-forward sur de vraies données.** Si l'écart entre
    Sharpe plein échantillon et hors échantillon dépasse 0,5, il n'y a pas
    d'avantage : inutile d'aller plus loin.

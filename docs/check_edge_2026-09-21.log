@@ -1,0 +1,64 @@
+505 series chargees depuis data/prices/us
+
+============================================================================================
+  1. INFORMATION COEFFICIENT
+     Correlation de rang entre le score du jour de signal et le rendement
+     realise jusqu'au rebalancement suivant. |t| > 2 = signal credible.
+============================================================================================
+  facteur                 IC moyen IC median        t         p     % > 0       n
+  momentum 252-21           0.0055    0.0132     0.84     0.402     52.0%    1080
+  faible volatilite        -0.0150   -0.0220    -2.05     0.041     45.9%    1126  <-- signal
+  tendance MM200           -0.0095    0.0006    -1.56     0.119     50.2%    1112
+  COMPOSITE                -0.0033    0.0037    -0.51     0.609     50.8%    1112
+
+============================================================================================
+  2. DECOMPOSITION : quelle brique apporte quelque chose ?
+     Chaque ligne ajoute UNE brique a la precedente.
+============================================================================================
+  etape                                              CAGR  Sharpe    maxDD    d.CAGR  d.Sharpe
+  indice de reference                              10.87%    0.54  -55.19%       n/a       n/a
+  univers entier, equipondere                      14.81%    0.69  -51.56%     3.95%      0.16
+  + selection factorielle (top 20, equipondere)    21.30%    0.82  -57.47%     6.48%      0.13
+  + ponderation inv_vol                            16.71%    0.71  -59.29%    -4.59%     -0.11
+  + filtre de regime (strategie complete)          13.67%    0.69  -29.63%    -3.04%     -0.02
+
+============================================================================================
+  3. LE SCORE CLASSE-T-IL, OU TROUVE-T-IL SEULEMENT LES EXTREMES ?
+     Rendement mensuel moyen par decile, en ecart a l'univers entier.
+============================================================================================
+  univers entier : 0.330%/mois sur 1112 dates
+
+                                rdt/mois      ecart        t
+  decile 1 (pires scores)         0.550%    +0.220%     3.37  <--
+  decile 2                        0.374%    +0.044%     1.36
+  decile 3                        0.374%    +0.043%     1.95
+  decile 4                        0.312%    -0.018%    -1.14
+  decile 5                        0.310%    -0.021%    -1.30
+  decile 6                        0.301%    -0.029%    -1.70
+  decile 7                        0.288%    -0.042%    -2.03  <--
+  decile 8                        0.257%    -0.073%    -3.12  <--
+  decile 9                        0.232%    -0.099%    -3.37  <--
+  decile 10 (meilleurs)           0.304%    -0.026%    -0.58
+  les 20 meilleurs scores         0.390%    +0.060%     0.94
+  les 20 pires scores             0.648%    +0.317%     3.37  <--
+
+  ECART MEILLEURS - PIRES : -0.257%/mois, t = -1.90, p = 0.058
+  Cet ecart n'est pas significatif : le score ne CLASSE pas.
+  Si les deux bouts du classement surperforment le milieu, un top 20
+  brillant ne prouve rien - il selectionne des titres extremes, pas
+  des gagnants. Sur un univers de survivants, les extremes qui ont
+  survecu sont precisement ceux qui sont montes.
+
+  Verification par l'absurde : on retourne le score et on relance.
+                                          CAGR   Sharpe      maxDD
+  score normal (meilleurs scores)       13.67%     0.69    -29.63%
+  score INVERSE (pires scores)          15.36%     0.69    -38.41%
+  univers entier, sans selection        14.81%     0.69    -51.56%
+
+  Ecart normal - inverse : -1.69 point de CAGR, +0.01 de Sharpe.
+  Acheter les PIRES scores rapporte autant : le score ne classe rien.
+
+============================================================================================
+  4. NULL ALEATOIRE : la strategie bat-elle un score sans information ?
+============================================================================================
+     15/300 tirages...     30/300 tirages...     45/300 tirages...

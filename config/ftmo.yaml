@@ -1,0 +1,238 @@
+# ---------------------------------------------------------------------------
+# Univers : actions americaines (S&P 500)
+# ---------------------------------------------------------------------------
+name: ftmo
+
+universe:
+  source: file           # catalogue FTMO, liste figee
+  file: "config/univers_ftmo.txt"
+  # SPY, et non "^GSPC" : les cours des titres sont telecharges DIVIDENDES
+  # REINVESTIS (auto_adjust). Comparer une strategie dividendes reinvestis a
+  # un indice de PRIX offre ~2 points de rendement par an a la strategie, sans
+  # que rien ne le signale. SPY est un ETF : sa serie ajustee est bien une
+  # serie total return.
+  benchmark: "SPY"
+  min_tickers: 30        # le catalogue FTMO en compte ~55 ; sous 30 c'est un probleme
+  allow_fallback: false  # true = accepte la liste statique de repli (PAS le S&P 500)
+  max_tickers: null      # null = tout l'univers ; un entier pour tester vite
+
+data:
+  start: "2005-01-01"
+  end: null              # null = aujourd'hui
+  provider: yfinance     # yfinance | stooq
+  # On reutilise le cache existant : 55 des 57 actions FTMO y sont deja, SPY
+  # compris. Rien a retelecharger pour backtester. SHOP et SQ manquent, et
+  # `min_valid_factors` les ecartera proprement.
+  cache_dir: "data/prices/us"
+  min_history_days: 300  # un titre avec moins d'historique est ignore
+  stale_days: 10         # sans cours reel pendant N seances -> titre intraitable
+  currency: USD
+
+# ---------------------------------------------------------------------------
+# Facteurs : chacun est transforme en z-score cross-sectionnel (compare aux
+# autres titres le meme jour), puis combine en un score unique.
+# ---------------------------------------------------------------------------
+factors:
+  momentum:
+    weight: 1.0
+    lookback: 252        # ~12 mois de bourse
+    skip: 21             # on saute le dernier mois (effet de retournement CT)
+  low_volatility:
+    weight: 0.5          # poids positif = on PREFERE la faible volatilite
+    window: 63           # ~3 mois
+  trend:
+    weight: 0.5
+    window: 200          # ecart au cours moyen 200 jours
+  winsorize: 3.0         # on borne les z-scores a +/- 3 ecarts-types
+  min_valid_factors: 2   # un titre doit avoir au moins 2 facteurs calculables
+
+# ---------------------------------------------------------------------------
+# Filtre de regime : on ne s'expose que si le marche est en tendance haussiere.
+# ---------------------------------------------------------------------------
+regime:
+  enabled: true
+  ma_window: 200
+  cash_weight_when_off: 1.0   # 1.0 = 100% cash quand le filtre est negatif
+
+# ---------------------------------------------------------------------------
+# Portefeuille
+# ---------------------------------------------------------------------------
+portfolio:
+  top_n: 8               # sur ~55 titres, 20 lignes ne selectionnent plus rien
+  weighting: inv_vol     # equal | inv_vol (ponderation inverse a la volatilite)
+  max_weight: 0.15       # 8 lignes x 15 % = 120 % de plafond theorique
+  vol_window: 63
+
+  # Pilotage de la volatilite (desactive par defaut).
+  #
+  # Ajuste l'EXPOSITION TOTALE pour viser une volatilite constante, au lieu de
+  # la subir : elle flotte aujourd'hui entre 10 % et 40 % selon les periodes.
+  # Deux faits, exterieurs a ces donnees, le justifient : la volatilite est
+  # persistante (donc previsible, contrairement au rendement), et les periodes
+  # tres volatiles rapportent en moyenne MOINS, pas plus.
+  #
+  # exposition_max > 1.0 signifie EMPRUNTER. Le cout de l'emprunt est
+  # desormais facture : le taux sans risque (`risk_free_annual`) plus la marge
+  # du courtier (`execution.financing_spread_bps`). Verifie que cette marge
+  # correspond au taux reel de TON courtier avant de depasser 1.0 - c'est elle
+  # qui decide si un levier rapporte quelque chose.
+  volatilite:
+    active: false
+    cible: 0.12           # volatilite annualisee visee
+    fenetre: 63           # seances servant a estimer la covariance
+    min_obs: 40           # sous ce nombre d'observations, pas de pilotage
+    exposition_min: 0.10
+    exposition_max: 1.00  # 1.0 = jamais de levier
+
+  # Contrainte de correlation a la SELECTION (desactivee par defaut).
+  #
+  # Mesure sur l'univers reel : les 20 lignes retenues par le score affichent
+  # une correlation moyenne de 0,21 et une volatilite de 35 %, contre 0,12 et
+  # 14 % pour 20 titres tires au hasard - 100e percentile sur 400 tirages.
+  # Vingt lignes qui se comportent comme quatre. La ponderation inverse-vol
+  # n'y peut rien : elle agit APRES la selection.
+  #
+  # active: true fait descendre le classement en ecartant les candidats trop
+  # correles a ceux deja retenus. Le classement du score reste prioritaire :
+  # on ne prend jamais un moins bon score si un meilleur passe la contrainte.
+  diversification:
+    active: false
+    correlation_max: 0.35   # correlation moyenne max avec les titres deja retenus
+    fenetre: 252          # seances utilisees pour estimer les correlations
+    min_obs: 60           # sous ce nombre d'observations, le titre n'est pas contraint
+    candidats: 3.0        # vivier = top_n x ce facteur (1.0 = aucun arbitrage possible)
+
+# ---------------------------------------------------------------------------
+# Execution et frais. Ces chiffres sont VOLONTAIREMENT conservateurs :
+# sous-estimer les frais est la premiere cause de backtests trompeurs.
+# ---------------------------------------------------------------------------
+execution:
+  rebalance: weekly     # monthly | weekly | quarterly
+
+  # AMORCAGE : autoriser l'entree initiale sur un compte vide, sans attendre
+  # le prochain rebalancement.
+  #
+  # Sans cela, un compte neuf reste 100 % en liquidites jusqu'au prochain
+  # signal - une semaine en hebdomadaire, jusqu'a un mois en mensuel. Ce n'est
+  # pas la strategie qui se protege, c'est une machine qui n'a jamais demarre.
+  #
+  # Ce n'est PAS un rebalancement force : le backtest aussi entre a une date
+  # arbitraire, celle ou son historique commence. On entre une seule fois, sur
+  # la cible du dernier signal ECHU - exactement ce que le backtest detiendrait
+  # aujourd'hui. La CADENCE, elle, n'est pas touchee.
+  #
+  # Ne se declenche que si le compte est reellement vide (moins de 1 % investi)
+  # ET que la cible contient quelque chose : si le filtre de regime dit
+  # "liquidites", un compte vide est le portefeuille CORRECT.
+  amorcage: true
+  execution_lag: 1       # jours de bourse entre le signal et l'execution
+  commission_bps: 5.0    # 0.05% par transaction (achat ou vente)
+  slippage_bps: 5.0      # 0.05% d'ecart de prix subi
+  delisting_haircut_bps: 0.0  # decote appliquee a une position soldee pour
+                              # cause de radiation. 0 = on suppose la vente
+                              # au dernier cours connu, hypothese OPTIMISTE
+                              # en cas de faillite. Mets 2000 (soit -20%)
+                              # pour tester la sensibilite du resultat.
+  initial_capital: 100000.0
+  risk_free_annual: 0.02 # remuneration du cash
+
+  # Marge du courtier SUR le taux sans risque, facturee uniquement sur la part
+  # empruntee (somme des poids > 1). Sans levier, elle ne change rien.
+  #
+  # 300 points de base est un ORDRE DE GRANDEUR, pas une mesure : avec
+  # `risk_free_annual` a 2 %, cela fait 5 % l'an sur l'argent emprunte. Les
+  # taux sur marge des courtiers de detail vont de 5 a 12 % selon l'encours ;
+  # va lire le tien et mets-le ici. Zero signifierait "le courtier prete au
+  # taux sans risque", ce qu'aucun ne fait.
+  financing_spread_bps: 300.0
+
+# ---------------------------------------------------------------------------
+# Validation walk-forward : on optimise sur une fenetre, on teste sur la
+# suivante, jamais vue. C'est le seul chiffre a peu pres honnete.
+# ---------------------------------------------------------------------------
+walk_forward:
+  train_years: 4
+  test_years: 1
+  grid:                    # chemins COMPLETS, valides au chargement
+    portfolio.top_n: [10, 20, 30]
+    factors.momentum.lookback: [126, 252]
+    regime.ma_window: [150, 200]
+  objective: calmar      # sharpe | calmar | cagr
+
+# ---------------------------------------------------------------------------
+# Courtier. Tout est en SIMULATION par defaut : `allow_live` est le premier des
+# trois verrous a ouvrir pour toucher a de l'argent reel (les deux autres sont
+# la variable d'environnement QUANTBOT_LIVE et l'option --reel).
+# ---------------------------------------------------------------------------
+broker:
+  provider: mt5                # mt5 | alpaca
+  allow_live: false            # VERROU 1/3. Les comptes de challenge FTMO sont
+                               # des comptes DEMO : ce verrou reste ferme.
+
+  # Chemin du terminal. Laisse vide si un seul MT5 est installe : la librairie
+  # trouve alors le terminal ouvert toute seule.
+  terminal: null               # ex : "C:/Program Files/FTMO MetaTrader 5/terminal64.exe"
+  login: null                  # numero de compte FTMO ; null = compte deja ouvert
+  serveur: null                # ex : "FTMO-Demo"  (le mot de passe vient de
+                               # la variable d'environnement MT5_PASSWORD,
+                               # JAMAIS du fichier de config)
+
+  magic: 770315                # identifiant des ordres du bot dans MT5
+  deviation: 20                # glissement tolere, en points
+
+  fractionnaire: false         # MT5 travaille en LOTS, par pas de volume_step
+  min_order_pct: 0.0025
+  min_order_notional: 25.0
+  max_order_pct: 0.20          # 8 lignes : une ligne peut peser plus qu'a 500
+  max_echange_par_seance: 2.0
+
+# ---------------------------------------------------------------------------
+# Marge et levier
+#
+# Le levier sur les actions est plafonne (1:5 chez FTMO au moment d'ecrire),
+# la ou le forex est a 1:100. Un portefeuille de 8 actions a 100 % d'exposition
+# demande donc 20 % du capital en marge - ce qui passe. A 300 % d'exposition il
+# demanderait 60 %, et le premier ordre refuse serait un 10019.
+#
+# ATTENTION : `levier_actions` ci-dessous ne sert QUE de borne de securite
+# a priori. La marge reelle est toujours demandee au terminal via
+# `order_calc_margin`, symbole par symbole. Un levier code en dur devient faux
+# le jour ou le courtier le change, et l'erreur sort en pleine seance.
+# ---------------------------------------------------------------------------
+marge:
+  levier_actions: 5.0          # borne de securite, pas une source de verite
+  exposition_max: 1.00         # somme des poids. 1.0 = aucun levier demande
+  marge_libre_min_pct: 0.30    # on refuse d'envoyer si la marge libre tomberait
+                               # sous 30 % de l'equity : le coupe-circuit doit
+                               # pouvoir solder sans se heurter a un appel de marge
+# ---------------------------------------------------------------------------
+# Mode "defi" : garde-fous de perte au format des prop firms.
+#
+# Ce ne sont pas des signaux, ce sont des INTERRUPTEURS. Ils n'influencent
+# jamais le choix des titres : ils empechent seulement d'envoyer des ordres
+# quand une limite de perte est franchie.
+#
+# Les seuils sont volontairement SOUS ceux du contrat : 4 % quand le defi dit
+# 5 %, 8 % quand il dit 10 %. Un garde-fou qui se declenche pile a la limite
+# ne sert a rien - entre la decision du bot et l'execution, le marche bouge.
+#
+# "Limites du defi" est un controle BLOQUANT que `forcer` ne leve pas :
+# aucune urgence ne justifie de passer outre une limite de perte.
+# ---------------------------------------------------------------------------
+# Regles du defi vise (Stellar 2-Step 100K) :
+#   phase 1 +8 %, phase 2 +5 %, perte jour -5 %, perte max -10 % STATIQUE,
+#   5 jours de negociation minimum.
+# Regles du defi vise (FTMO Challenge 2-Step, verifiees le 21/09/2026) :
+#   phase 1 +10 %, phase 2 +5 %, perte jour -5 %, perte max -10 % STATIQUE,
+#   4 jours de negociation minimum.
+#
+# La perte journaliere FTMO se mesure sur le SOLDE a 00:00 CET, pas sur
+# l'equity de la veille. `mt5broker.compte()` expose donc le solde dans
+# `last_equity`, et c'est ce que lit `defi.evaluer`.
+defi:
+  active: true
+  perte_jour_max: 0.04      # le contrat dit 5 % : un point de marge
+  perte_totale_max: 0.08    # le contrat dit 10 % statique
+  reference: statique
+  objectif: 0.10            # phase 1 FTMO ; 0.05 en phase 2
+  solder_sur_verrou: true

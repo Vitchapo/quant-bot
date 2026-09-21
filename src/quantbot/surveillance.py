@@ -32,7 +32,7 @@ est le meilleur moyen de transformer une anomalie en perte.
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 #: Sous ce nombre de titres, une ligne est de la poussiere : elle vient des
@@ -364,11 +364,124 @@ def rebalancement_incomplet(lignes_journal, compte=None) -> dict:
 # ---------------------------------------------------------------------------
 # 3. Bilan
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Sante du coupe-circuit
+# ---------------------------------------------------------------------------
+#: Au-dela, un coupe-circuit muet n'est plus un incident, c'est une absence de
+#: protection. Six passages a dix minutes = une heure de seance sans filet.
+ECHECS_AVANT_ALERTE = 6
+
+#: Silence tolere avant de conclure que la tache ne tourne plus du tout.
+#: Large a dessein : le coupe-circuit ne sert qu'en seance, et une alerte qui
+#: crie tous les week-ends est une alerte qu'on finit par ignorer.
+SILENCE_MAX_MINUTES = 90
+
+
+def sante_coupe_circuit(etat: dict, maintenant=None,
+                        echecs_max: int = ECHECS_AVANT_ALERTE,
+                        silence_max_minutes: int = SILENCE_MAX_MINUTES) -> dict:
+    """Le coupe-circuit journalier protege-t-il REELLEMENT quelque chose ?
+
+    `etat` est le contenu de `data/coupe_circuit_etat.json`.
+
+    Pourquoi cette fonction existe
+    ------------------------------
+    Un coupe-circuit qui ne joint pas le terminal ne protege rien - mais il
+    continue de figurer dans le planificateur, de s'executer a l'heure, et de
+    renvoyer un code d'erreur que personne ne lit. Vu du planificateur, il a
+    l'air vivant. C'est la forme la plus dangereuse de panne : celle qui
+    ressemble a un fonctionnement.
+
+    C'est exactement le mode de defaillance de la tache `quantbot` qui n'a
+    jamais existe pendant des semaines sans que personne ne s'en apercoive.
+    Ici l'enjeu est pire : entre-temps, des positions peuvent etre ouvertes.
+    """
+    etat = etat or {}
+    if not etat:
+        return {"ok": True, "niveau": "normal", "echecs": 0,
+                "message": "Coupe-circuit jamais lance."}
+
+    echecs = int(etat.get("echecs_consecutifs", 0) or 0)
+    derniere = etat.get("derniere_erreur") or ""
+    succes = etat.get("dernier_succes")
+
+    # -- la tache tourne-t-elle encore ? ---------------------------------
+    #
+    # Le trou que le compteur d'echecs ne voit pas : une tache dont
+    # l'interpreteur a disparu echoue AVANT Python, donc n'ecrit rien. Le
+    # compteur reste a zero, et un coupe-circuit qui ne s'execute plus du tout
+    # passerait pour operationnel. C'est arrive le 21 septembre 2026 : le
+    # lanceur pointait sur un `python.exe` inexistant.
+    #
+    # Ce que cette mesure NE PEUT PAS savoir : si le marche etait ouvert. On
+    # reste donc en "attention" tant que le silence est court, et on n'escalade
+    # qu'au-dela de six fois le seuil - un week-end ne doit pas crier.
+    derniere_tentative = _horodatage(etat.get("derniere_tentative")
+                                     or etat.get("dernier_succes"))
+    if derniere_tentative is not None:
+        # `coupe_circuit.py` horodate en UTC AVEC fuseau, `robot_etat.json` en
+        # heure locale SANS fuseau. Soustraire l'un de l'autre leve
+        # `TypeError: can't subtract offset-naive and offset-aware datetimes`,
+        # et la veille plante au lieu de surveiller - une surveillance qui
+        # tombe en panne sur le format de sa propre entree est pire qu'absente.
+        #
+        # Les tests ne l'avaient pas vu : leurs horodatages etaient naifs. Ce
+        # sont les vraies donnees qui l'ont montre.
+        if derniere_tentative.tzinfo is not None:
+            reference = maintenant or datetime.now(timezone.utc)
+            if reference.tzinfo is None:
+                reference = reference.replace(tzinfo=timezone.utc)
+        else:
+            reference = maintenant or datetime.now()
+            if reference.tzinfo is not None:
+                reference = reference.replace(tzinfo=None)
+        minutes = (reference - derniere_tentative).total_seconds() / 60.0
+        if minutes > silence_max_minutes * 6:
+            return {"ok": False, "niveau": "alerte", "echecs": echecs,
+                    "minutes_silence": round(minutes),
+                    "message": "COUPE-CIRCUIT MUET depuis %.0f h. Il ne s'execute "
+                               "probablement plus du tout : verifie que la tache "
+                               "existe et que son interpreteur Python existe "
+                               "encore." % (minutes / 60.0)}
+        if minutes > silence_max_minutes:
+            return {"ok": False, "niveau": "attention", "echecs": echecs,
+                    "minutes_silence": round(minutes),
+                    "message": "Coupe-circuit sans signe de vie depuis %.0f min "
+                               "(hors seance, c'est normal)." % minutes}
+
+    maintenant = maintenant or datetime.now()
+    if echecs == 0:
+        return {"ok": True, "niveau": "normal", "echecs": 0,
+                "dernier_succes": succes,
+                "message": "Coupe-circuit operationnel (dernier contact %s)."
+                           % (succes or "?")}
+
+    depuis = etat.get("premiere_erreur") or "?"
+    if echecs < echecs_max:
+        return {"ok": False, "niveau": "attention", "echecs": echecs,
+                "message": "Coupe-circuit en echec depuis %d passage(s) (%s) : %s"
+                           % (echecs, depuis, derniere[:120])}
+
+    return {"ok": False, "niveau": "alerte", "echecs": echecs,
+            "message": "COUPE-CIRCUIT HORS SERVICE depuis %d passages (%s). "
+                       "Aucune limite de perte n'est surveillee. Si des "
+                       "positions sont ouvertes, elles ne sont protegees par "
+                       "RIEN. Cause : %s" % (echecs, depuis, derniere[:120])}
+
 def bilan(etat_robot: dict, reconciliation: dict, incomplet: dict,
-          maintenant=None) -> dict:
+          maintenant=None, etat_coupe_circuit: dict = None) -> dict:
     """Un seul verdict, lisible sans connaitre le detail."""
     sante = sante_robot(etat_robot, maintenant=maintenant)
     alertes, attentions = [], []
+
+    # Le coupe-circuit passe AVANT tout le reste : un desaccord de
+    # reconciliation se rattrape, une limite de perte non surveillee non.
+    cc = sante_coupe_circuit(etat_coupe_circuit, maintenant=maintenant)
+    if cc["niveau"] == "alerte":
+        alertes.append(cc["message"])
+    elif cc["niveau"] == "attention":
+        attentions.append(cc["message"])
 
     if sante["niveau"] == "alerte":
         alertes.append(sante["message"])
@@ -404,7 +517,7 @@ def bilan(etat_robot: dict, reconciliation: dict, incomplet: dict,
         niveau, resume = "normal", "Robot vivant, comptes d'accord."
 
     return {"niveau": niveau, "resume": resume, "alertes": alertes,
-            "attentions": attentions, "sante": sante}
+            "attentions": attentions, "sante": sante, "coupe_circuit": cc}
 
 
 def lire_etat(chemin) -> dict:

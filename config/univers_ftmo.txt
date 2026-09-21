@@ -1,0 +1,85 @@
+# Catalogue FTMO : actions CFD individuelles + indices.
+#
+# Cette liste est une HYPOTHESE tant qu'elle n'a pas ete confrontee au
+# terminal. Le catalogue exact depend du serveur FTMO et du type de compte, et
+# FTMO ne le publie pas sous une forme lisible par machine.
+#
+# Pour la remplacer par la verite du terminal :
+#     python scripts/ftmo_catalogue.py --ecrire config/univers_ftmo.txt
+#
+# Les tickers absents du catalogue ne font PAS planter le bot : ils sont
+# ecartes au demarrage et listes dans le compte rendu.
+
+# --- technologie ---
+AAPL
+MSFT
+NVDA
+AMZN
+META
+GOOG
+GOOGL
+TSLA
+AMD
+INTC
+NFLX
+ORCL
+CRM
+ADBE
+CSCO
+AVGO
+QCOM
+TXN
+MU
+PYPL
+UBER
+# SHOP et SQ : pas dans data/prices/us. Decommente apres un fetch_data.
+#SHOP
+#SQ
+PLTR
+SMCI
+
+# --- sante ---
+JNJ
+PFE
+MRK
+ABBV
+LLY
+UNH
+CVS
+MRNA
+
+# --- finance ---
+JPM
+BAC
+GS
+MS
+WFC
+C
+V
+MA
+BRK-B
+
+# --- conso et industrie ---
+KO
+PEP
+MCD
+NKE
+SBUX
+WMT
+COST
+DIS
+BA
+CAT
+GE
+MMM
+PG
+
+# --- energie ---
+XOM
+CVX
+
+# --- indices (noms FTMO natifs, pas des tickers boursiers) ---
+US500.cash
+US100.cash
+US30.cash
+GER40.cash
