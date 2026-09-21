@@ -34,12 +34,33 @@ def univers():
     return prix
 
 
-@pytest.fixture(scope="module")
-def cfg_live(base_config):
+@pytest.fixture(params=["monthly", "weekly"])
+def cfg_live(base_config, request):
+    """La CADENCE est pinnee, et parametree sur les deux valeurs utilisees.
+
+    Elle etait auparavant heritee de `config/us.yaml` pendant que les tests
+    calculaient les dates de signal avec "monthly" ecrit en dur. Le jour ou la
+    config est passee en `weekly` - pour satisfaire le minimum de 5 jours de
+    negociation du defi - les six tests de ce fichier se sont mis a echouer
+    sans qu'aucun code metier n'ait bouge. Un test dont le SENS depend d'un
+    fichier de configuration ne teste pas ce qu'il annonce.
+
+    Parametrer sur les deux cadences repare davantage que le couplage : avant,
+    l'equivalence live/backtest n'etait verifiee qu'en mensuel, alors que le
+    compte reel tourne en hebdomadaire.
+    """
     return base_config.with_overrides({
         "universe.benchmark": "^B", "data.min_history_days": 260,
         "portfolio.top_n": 4, "portfolio.weighting": "inv_vol",
-        "regime.enabled": True, "execution.execution_lag": 1})
+        "regime.enabled": True, "execution.execution_lag": 1,
+        "execution.rebalance": request.param})
+
+
+def _dates_signal(idx, cfg):
+    """Les dates de signal SELON LA CONFIG UTILISEE, jamais une cadence ecrite
+    en dur : c'est ce qui rend impossible le desaccord entre le test et le
+    portefeuille qu'il examine."""
+    return set(rebalance_dates(idx, cfg.get("execution.rebalance")))
 
 
 def _tronquer(prix, fin):
@@ -49,8 +70,8 @@ def _tronquer(prix, fin):
 class TestJourDExecution:
     def test_le_bot_ne_s_active_que_le_lendemain_du_signal(self, univers, cfg_live):
         idx = univers["T00"].index
-        fins_de_mois = set(rebalance_dates(idx, "monthly"))
-        signal = sorted(d for d in fins_de_mois if d.year == 2026 and d.month == 8)[-1]
+        fins_de_periode = _dates_signal(idx, cfg_live)
+        signal = sorted(d for d in fins_de_periode if d < idx[-2])[-1]
         suivante = idx[idx.get_indexer([signal])[0] + 1]
 
         veille = live.portefeuille_cible(_tronquer(univers, signal), cfg_live,
@@ -63,15 +84,21 @@ class TestJourDExecution:
 
     def test_les_autres_jours_ne_declenchent_rien(self, univers, cfg_live):
         idx = univers["T00"].index
-        fins_de_mois = set(rebalance_dates(idx, "monthly"))
-        declenchements = 0
+        fins_de_periode = _dates_signal(idx, cfg_live)
+        declenchements = ordinaires = 0
         for fin in idx[-25:]:
             c = live.portefeuille_cible(_tronquer(univers, fin), cfg_live, aujourdhui=fin)
+            position = idx.get_indexer([fin])[0]
             if c.est_jour_execution:
                 declenchements += 1
-                position = idx.get_indexer([fin])[0]
-                assert idx[position - 1] in fins_de_mois
+                assert idx[position - 1] in fins_de_periode
+            else:
+                ordinaires += 1
         assert declenchements >= 1, "au moins un rebalancement sur les 25 dernieres seances"
+        # Sans cette seconde borne, une cadence qui declencherait TOUS les
+        # jours passerait le test : la boucle ci-dessus ne verifie que les
+        # jours ou le bot s'active, jamais qu'il existe des jours ou il dort.
+        assert ordinaires >= 1, "le bot s'active tous les jours : la cadence ne filtre rien"
 
 
 class TestEquivalenceAvecLeBacktest:
@@ -101,12 +128,12 @@ class TestEquivalenceAvecLeBacktest:
         idx = univers["T00"].index
         cfg_live = cfg_live.with_overrides(options) if options else cfg_live
         resultat = run_backtest(univers, cfg_live)
-        fins_de_mois = set(rebalance_dates(idx, "monthly"))
+        fins_de_periode = _dates_signal(idx, cfg_live)
 
         verifies = 0
         for position in range(len(idx) - 40, len(idx)):
             jour = idx[position]
-            if idx[position - 1] not in fins_de_mois:
+            if idx[position - 1] not in fins_de_periode:
                 continue
             cible = live.portefeuille_cible(_tronquer(univers, jour), cfg_live, aujourdhui=jour)
             assert cible.est_jour_execution, "ce jour-la, le bot doit s'activer"
@@ -131,8 +158,8 @@ class TestEquivalenceAvecLeBacktest:
         """Le jour de l'execution, la seance en cours n'a pas encore de cloture.
         Sa barre partielle ne doit pas influencer les poids."""
         idx = univers["T00"].index
-        fins_de_mois = set(rebalance_dates(idx, "monthly"))
-        signal = sorted(d for d in fins_de_mois if d.year == 2026 and d.month == 8)[-1]
+        fins_de_periode = _dates_signal(idx, cfg_live)
+        signal = sorted(d for d in fins_de_periode if d < idx[-2])[-1]
         jour = idx[idx.get_indexer([signal])[0] + 1]
 
         normal = live.portefeuille_cible(_tronquer(univers, jour), cfg_live, aujourdhui=jour)

@@ -39,6 +39,7 @@ d'imposer scipy.
 from __future__ import annotations
 
 import math
+import warnings
 import time
 from typing import Callable, Optional
 
@@ -107,6 +108,10 @@ def factor_panels(close: pd.DataFrame, cfg) -> dict:
 # ---------------------------------------------------------------------------
 # 1. Information coefficient
 # ---------------------------------------------------------------------------
+COLONNES_IC = ["facteur", "ic_moyen", "ic_median", "ic_ecart_type", "t_stat",
+               "p_value", "part_positive", "n_dates"]
+
+
 def information_coefficient(prices: dict, cfg, start=None, end=None) -> pd.DataFrame:
     """IC de Spearman entre le score en t et le rendement jusqu'au rebalancement suivant.
 
@@ -127,6 +132,7 @@ def information_coefficient(prices: dict, cfg, start=None, end=None) -> pd.DataF
 
     positions = close.index.get_indexer(dates)
     rows = []
+    fenetres_vides = 0
     for name, panel in panels.items():
         ics = []
         for k, p in enumerate(positions):
@@ -134,7 +140,14 @@ def information_coefficient(prices: dict, cfg, start=None, end=None) -> pd.DataF
                 break
             entry = p + lag
             exit_ = close.index.get_indexer([dates[k + 1]])[0]
+            # entry >= exit_ signifie que l'execution tombe APRES le signal
+            # suivant : la fenetre de mesure est vide. C'est le cas des qu'on
+            # demande un delai superieur ou egal a l'ecart entre deux
+            # rebalancements - par exemple lag=5 en cadence hebdomadaire. Il
+            # n'y a alors rien a mesurer, et c'est une contrainte de
+            # chronologie, pas une anomalie de donnees.
             if entry >= exit_ or exit_ >= len(close.index):
+                fenetres_vides += 1
                 continue
             forward = close.iloc[exit_] / close.iloc[entry] - 1.0
             pair = pd.concat([panel.loc[close.index[p]], forward], axis=1).dropna()
@@ -157,6 +170,20 @@ def information_coefficient(prices: dict, cfg, start=None, end=None) -> pd.DataF
             "part_positive": float((arr > 0).mean()),
             "n_dates": int(len(arr)),
         })
+    # Sans colonnes, un resultat vide fait exploser l'appelant sur un KeyError
+    # illisible au lieu de lui montrer un tableau vide. Le cas se produit pour
+    # de bonnes raisons - delai >= cadence, historique trop court - et un outil
+    # de MESURE qui echoue de facon confuse est pire qu'un outil qui dit "rien
+    # a mesurer" : on croit avoir mesure.
+    if not rows:
+        if fenetres_vides:
+            warnings.warn(
+                "aucun IC calculable : %d fenetre(s) vide(s). L'execution "
+                "(delai %d seance(s)) tombe apres le signal suivant en cadence "
+                "%s - il n'y a aucun intervalle a mesurer."
+                % (fenetres_vides, lag,
+                   cfg.get("execution.rebalance", "monthly")), stacklevel=2)
+        return pd.DataFrame(columns=COLONNES_IC)
     return pd.DataFrame(rows)
 
 

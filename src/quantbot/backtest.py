@@ -194,6 +194,22 @@ def run_backtest(prices: dict[str, pd.DataFrame], cfg, verbose: bool = False,
                  + float(cfg.get("execution.slippage_bps", 0.0))) / 10_000.0
     haircut = float(cfg.get("execution.delisting_haircut_bps", 0.0)) / 10_000.0
     rf_daily = (1.0 + float(cfg.get("execution.risk_free_annual", 0.0))) ** (1 / 252) - 1.0
+
+    # -- cout de l'argent EMPRUNTE ----------------------------------------
+    #
+    # Quand la somme des poids depasse 1, `cash` devient negatif et la ligne
+    # `cash * rf_daily` facture alors bien un interet : au taux SANS RISQUE.
+    # C'est deja mieux que rien - la config affirmait a tort "aucun interet" -
+    # mais aucun courtier ne prete au taux sans risque. Ce qu'il facture, c'est
+    # ce taux PLUS une marge : de l'ordre de 3 a 6 points chez un courtier de
+    # detail. L'ecart n'est pas un detail de modelisation, c'est ce qui decide
+    # si un levier rapporte quelque chose.
+    #
+    # Cette marge n'est prelevee que sur la part reellement empruntee. Sans
+    # levier - `exposition_max` a 1.00, le defaut - `cash` reste positif, rien
+    # n'est preleve, et les resultats sont identiques au dernier chiffre pres a
+    # ceux d'avant cette correction.
+    spread_daily = (float(cfg.get("execution.financing_spread_bps", 0.0)) / 10_000.0) / 252.0
     nav0 = float(cfg.get("execution.initial_capital", 100_000.0))
 
     dates = close.index
@@ -234,6 +250,11 @@ def run_backtest(prices: dict[str, pd.DataFrame], cfg, verbose: bool = False,
                 w = w * (1.0 + ret_filled[i]) / growth
                 cash = cash * (1.0 + rf_daily) / growth
             daily_ret[i] = gross
+            # La marge du courtier sur la part empruntee, prelevee comme un
+            # frais : elle entre donc dans `costs` et se lit dans le rapport,
+            # au lieu de disparaitre dans le rendement brut.
+            if spread_daily and cash < 0.0:
+                _charge(i, -cash * spread_daily)
 
         # -- sortie de cote d'un titre detenu -----------------------------
         dead = (w > 1e-12) & ~tradeable_arr[i]

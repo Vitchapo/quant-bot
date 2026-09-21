@@ -107,6 +107,11 @@ execution:
   initial_capital: 100000.0
   risk_free_annual: 0.02 # remuneration du cash
 
+  # Marge du courtier SUR le taux sans risque, facturee uniquement sur la part
+  # empruntee (somme des poids > 1). Sans levier, elle ne change rien. Voir le
+  # commentaire detaille dans config/us.yaml.
+  financing_spread_bps: 300.0
+
 # ---------------------------------------------------------------------------
 # Validation walk-forward : on optimise sur une fenetre, on teste sur la
 # suivante, jamais vue. C'est le seul chiffre a peu pres honnete.

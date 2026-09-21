@@ -366,6 +366,103 @@ reste `trade.py --reel`, avec ses trois verrous et sa confirmation au clavier.
 
 ---
 
+## Le mode défi : limites de perte au format prop firm
+
+```bash
+python scripts/veille_defi.py --config config/us.yaml --etat-defi   # où en est-on
+python scripts/veille_defi.py --config config/us.yaml --a-blanc     # évalue, n'envoie rien
+python scripts/veille_defi.py --installer --minutes 30              # tâche Windows
+python scripts/veille_defi.py --lever-verrou                        # repartir, après analyse
+```
+
+Le bloc `defi` de la configuration active des **limites de perte**, réglées
+sous les seuils contractuels d'un défi : 4 % de perte journalière quand le
+contrat dit 5 %, 8 % de perte totale quand il dit 10 %. Un garde-fou qui se
+déclenche pile à la limite ne sert à rien — entre la décision du bot et
+l'exécution de l'ordre, le marché continue de bouger.
+
+Ce ne sont **pas des signaux**. Elles ne disent rien sur ce qu'il faut acheter
+et n'influencent jamais la sélection : ce sont des interrupteurs. Les mélanger
+à la stratégie donnerait des décisions dépendantes du chemin parcouru, donc
+incomparables à un backtest.
+
+### Statique ou glissante
+
+| référence | plancher | conséquence |
+|---|---|---|
+| `statique` | −10 % du solde de **départ**, fixe | les gains accumulés deviennent un matelas définitif |
+| `glissante` | −10 % du **plus haut** atteint | on peut être éliminé en étant encore en gain |
+
+Le défaut est `statique`. Se tromper de règle dans un sens arrête le bot sans
+aucune raison contractuelle ; dans l'autre, le laisse franchir une limite
+réelle. Départ et plus-haut sont tous deux sur disque
+(`data/defi_etat.json`) : le courtier ne connaît ni l'un ni l'autre, et sans
+persistance ils repartiraient de la valeur du jour à chaque redémarrage.
+
+### La perte journalière se mesure sur le capital de départ
+
+Le contrat dit « 5 % of initial balance » : un montant fixe en dollars. Le
+dénominateur est donc le capital de **départ**, pas la valeur de la veille.
+Les deux formules coïncident le premier jour et divergent ensuite. Parti de
+100 000 et monté à 200 000, une séance à −4 % coûte 8 000 : le contrat compte
+8 000 sur une enveloppe de 5 000 — éliminé — là où rapporter la perte à la
+veille affichait −4 % et laissait passer. Mesurer une limite fixe avec une
+règle élastique donne le mauvais verdict dans les deux sens.
+
+### Le verrou, et le piège qu'il évite
+
+À la brèche, le bot **annule ses ordres en vol, vend tout, puis se
+verrouille**. Geler les achats en gardant vingt lignes longues dans le marché
+qui vient de déclencher la limite, c'est attendre les deux points qui restent
+avant l'élimination. `defi.solder_sur_verrou: false` donne le comportement
+« gel seul », où l'opérateur solde à la main.
+
+Le verrou est écrit sur disque, ne se lève **jamais** tout seul — même si
+l'equity remonte au-dessus de tout — et bloque aussi l'**amorçage**. Cette
+dernière clause est la plus importante du mécanisme :
+
+```
+perte → le bot vend tout → compte vide → « tiens, un compte neuf »
+      → rachat du portefeuille entier au passage suivant
+```
+
+Solder laisse le compte vide, et un compte vide est exactement la condition
+d'amorçage. Sans verrou, la liquidation d'urgence se faisait racheter le
+lendemain matin, dans le marché même qui l'avait déclenchée.
+
+**L'objectif atteint verrouille aussi**, avec un motif distinct. C'est le seul
+moment du défi où le rapport risque/gain est strictement défavorable : la phase
+est acquise, chaque séance de plus ne peut que la reprendre.
+
+### Pourquoi un second script planifié
+
+`robot.py` tourne à 21:00 Paris, soit **après** la clôture de New York. Il y
+vérifiait la limite journalière — qui se franchit en séance, sur du non
+réalisé. La constater le soir, c'est en prendre acte : le compte était éliminé
+depuis six heures. Une limite qu'on ne mesure qu'après la clôture n'est pas un
+garde-fou, c'est un compte rendu d'autopsie.
+
+`veille_defi.py` est donc séparé, et volontairement minuscule : un appel REST
+au compte, un calcul pur, et la liquidation si besoin. Aucun cours téléchargé,
+aucun score recalculé, aucun verrou de moteur pris — `operations.etat()`
+recalculerait tout l'univers et gèlerait le tableau de bord vingt fois par
+séance. Il n'achète jamais rien : il ne sait que sortir. Hors séance, la
+consigne de liquidation est **conservée** plutôt qu'exécutée, et part à
+l'ouverture suivante.
+
+### Ce que le mode défi ne résout pas
+
+Les limites sont respectées ; cela ne rend pas la stratégie compatible avec un
+défi. La perte maximale hors échantillon de cette stratégie est de **−26 %**,
+soit deux fois et demie le seuil qui élimine. Un garde-fou empêche de franchir
+une limite, il ne réduit pas la volatilité de ce qu'il surveille. Et les défis
+de prop firm sont en pratique des comptes **CFD sur MT5/cTrader**, avec une
+vingtaine d'actions disponibles — là où cette stratégie classe 500 titres les
+uns par rapport aux autres. Le mode défi est un garde-fou de risque utile en
+soi, pas un billet d'entrée.
+
+---
+
 ## Connecter le bot a un courtier
 
 Le projet parle a **Alpaca** en REST direct (pas de SDK, pas de dependance
@@ -516,6 +613,42 @@ Aucun n'a levé d'exception ; tous ont été trouvés en revue.
 7. **Python 3.8 :** `duckdb` retiré (jamais importé, cassait l'installation
    sans Visual C++) et `multitasking` épinglé en 0.0.11 — au-delà, `yfinance`
    ne s'importe plus sous 3.8.
+8. **`ops.compte_vide()` n'existait pas.** Le seul de cette liste qui levait
+   bien une exception — et qui a quand même tourné dans le vide, parce que
+   personne ne lisait la sortie d'une tâche planifiée. `compte_vide` était une
+   **variable locale** de `Operations.etat()` ; `robot.py` l'appelait comme une
+   méthode. Chaque passage levait `AttributeError` juste après la mise à jour
+   des cours, avant toute décision, et rien n'était jamais envoyé. Le trou
+   n'était pas dans la logique — `decider()` est testée ligne à ligne — mais à
+   la **couture** entre deux modules tous les deux bien testés. D'où
+   `TestLAppelQuiNExistaitPas`, qui vérifie le contrat d'appel plutôt qu'un
+   comportement.
+9. **La perte journalière était rapportée à la veille, pas au départ.** Le
+   contrat dit « 5 % of initial balance » : un montant fixe. Les deux formules
+   coïncident le premier jour, ce qui explique que le bug ait pu passer. Parti
+   de 100 000 et monté à 200 000, une séance à −4 % coûte 8 000 — soit 8 000
+   sur une enveloppe de 5 000, donc éliminé — quand l'ancienne formule affichait
+   −4 % et laissait passer. Et symétriquement, après une baisse, elle arrêtait
+   le bot pour une perte que le contrat ne comptait pas.
+10. **Une brèche de défi ne survivait pas au rebond, et l'amorçage rachetait
+    tout.** Le garde-fou bloquait l'envoi, ne soldait rien, et oubliait la
+    brèche dès que l'equity remontait. Pire : solder laisse le compte **vide**,
+    or un compte vide est exactement la condition d'amorçage. La séquence
+    complète était perte → liquidation → compte vide → « un compte neuf » →
+    rachat du portefeuille entier au passage suivant, dans le marché même qui
+    venait de déclencher la limite. Le verrou est désormais sur disque, ne se
+    lève jamais seul, et bloque l'amorçage.
+11. **Une limite journalière contrôlée après la clôture.** `robot.py` tourne à
+    21:00 Paris ; la limite se franchit en séance, sur du non réalisé. Elle
+    était donc constatée six heures trop tard — un compte rendu d'autopsie, pas
+    un garde-fou. D'où `veille_defi.py`, planifié en séance.
+12. **Le coût du levier annoncé comme absent, facturé au mauvais taux.** Le
+    commentaire de `us.yaml` disait « le backtest ne facture aucun intérêt sur
+    l'argent emprunté ». Faux dans les deux sens : `cash * rf_daily` facturait
+    bien un intérêt, mais au taux **sans risque**, que personne ne pratique.
+    `execution.financing_spread_bps` ajoute la marge du courtier sur la seule
+    part empruntée. Sans levier — le défaut — rien ne change, ce qu'un test
+    vérifie au dernier chiffre près.
 
 ---
 
@@ -545,12 +678,20 @@ src/quantbot/
   broker.py       client REST Alpaca + les trois verrous de l'argent reel
   operations.py   etat du compte, controles, envoi — vue Operations et CLI
   executions.py   qualite d'execution : trois references, une seule conclut
+  defi.py         limites de perte au format prop firm. CONSTATE, n'agit pas :
+                  la liquidation est dans operations.appliquer_defi()
+  volatilite.py   pilotage de l'exposition a volatilite cible (inactif par defaut)
+  diversification.py  contrainte de correlation a la selection (inactive par defaut)
+  pointintime.py  univers point-in-time, pour mesurer le biais du survivant
+  surveillance.py reconciliation, sante du robot, rebalancement incomplet
   report.py       graphiques et rapport HTML autonome
 scripts/          fetch_data, run_backtest, walk_forward, check_edge,
                   dashboard, daily_signals, trade, verifier_executions,
-                  robot, archiver
+                  robot, veille_defi, archiver, verifier_sante,
+                  mesurer_biais, mesurer_volatilite, nouveau_compte
 secrets/          identifiants du courtier — hors depot, jamais versionne
-tests/            158 tests : anti-fuite temporelle, garde-fous, mesure d'edge
+tests/            381 tests : anti-fuite temporelle, garde-fous, mesure d'edge,
+                  limites de defi, coutures entre modules
 ```
 
 ## Réglages utiles
@@ -587,7 +728,7 @@ python scripts/run_backtest.py --config config/us.yaml --sensitivity
 python -m pytest tests/ -v
 ```
 
-158 tests : exactitude des facteurs, scénarios de backtest à résultat connu
+381 tests : exactitude des facteurs, scénarios de backtest à résultat connu
 d'avance, calcul des frais, robustesse aux trous de données et aux
 introductions en bourse récentes, la batterie anti-fuite temporelle, les
 garde-fous contre les replis silencieux (`test_garde_fous.py`) et la mesure
@@ -597,6 +738,14 @@ la planification des ordres (`test_orders.py`), les verrous du courtier
 (`test_broker.py`), la discipline du robot (`test_robot.py`) et surtout
 l'**équivalence entre la décision en direct et celle du backtest**
 (`test_live.py`) — mêmes poids, à la neuvième décimale.
+
+Deux familles ajoutées depuis : les limites de défi (`test_defi.py`,
+`TestVerrouEtLiquidation`) — dont le test du verrou qui survit au rebond et
+celui de l'amorçage qui ne rachète pas un compte soldé — et les **coutures**
+entre modules (`TestLAppelQuiNExistaitPas`). Cette dernière famille existe
+parce que le bug le plus coûteux du projet n'était pas dans une logique mal
+écrite mais dans un appel à une méthode qui n'existait pas, entre deux modules
+tous les deux bien testés. Un test par module ne voit pas ce genre de trou.
 
 ---
 

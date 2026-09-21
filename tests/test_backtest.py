@@ -187,3 +187,79 @@ class TestPlafonnement:
     def test_poids_negatifs_ecartes(self):
         w = cap_weights(np.array([1.0, -5.0, 1.0]), 1.0)
         assert (w >= 0).all() and w[1] == 0.0
+
+
+@pytest.fixture(scope="module")
+def runs(momentum_prices, base_config):
+    """Les backtests dont `TestCoutDeLArgentEmprunte` a besoin, calcules une fois.
+
+    Sept backtests sur l'univers complet valent une quarantaine de secondes :
+    les recalculer par test en couterait cinq fois plus pour le meme resultat.
+    """
+    combinaisons = [(1.0, 0.0), (1.0, 600.0), (1.25, 0.0), (1.25, 400.0),
+                    (1.5, 0.0), (1.5, 400.0), (1.5, 600.0)]
+    return {c: run_backtest(momentum_prices, _cfg_levier(base_config, *c))
+            for c in combinaisons}
+
+
+def _cfg_levier(base, exposition: float, spread: float):
+    """Exposition CONSTANTE : mini = maxi force la valeur quelle que soit la
+    volatilite estimee. On mesure le cout du levier, pas le pilotage."""
+    return base.with_overrides({
+        "regime.enabled": False,
+        "portfolio.volatilite.active": True,
+        "portfolio.volatilite.exposition_min": exposition,
+        "portfolio.volatilite.exposition_max": exposition,
+        "execution.financing_spread_bps": spread,
+    })
+
+
+class TestCoutDeLArgentEmprunte:
+    """Ce que coute un levier, et pourquoi le chiffre n'etait pas le bon.
+
+    La config affirmait : "Le backtest ne facture aucun interet sur l'argent
+    emprunte". C'etait faux dans les deux sens. La ligne `cash * rf_daily`
+    facturait bien un interet - mais au taux SANS RISQUE, que personne ne
+    pratique. Un courtier de detail prete a ce taux plus 3 a 6 points, et cet
+    ecart est precisement ce qui decide si un levier rapporte quelque chose ou
+    finance le courtier.
+
+    Ces tests tournent sur l'univers ALEATOIRE, et pas sur
+    `scenario_gagnant_evident` : le titre gagnant y monte a taux rigoureusement
+    constant, sa volatilite estimee est donc nulle, et le pilotage renvoie 1.0
+    sans jamais emprunter. Une premiere version de ces tests s'est cassee
+    dessus - et c'etait le test qui avait raison.
+    """
+
+    def test_le_levier_emprunte_vraiment(self, runs):
+        """Le prealable a tout le reste : sans `cash` negatif, ces tests
+        mesureraient l'effet d'un cout jamais preleve."""
+        assert runs[(1.5, 0.0)].cash.min() < -0.4
+        assert runs[(1.0, 0.0)].cash.min() >= -1e-9
+
+    def test_sans_levier_la_marge_ne_change_RIEN(self, runs):
+        """La garantie de non-regression : `exposition_max` vaut 1.00 par
+        defaut, donc tous les resultats deja publies restent valables au
+        dernier chiffre pres."""
+        sans, avec = runs[(1.0, 0.0)], runs[(1.0, 600.0)]
+        assert avec.equity.iloc[-1] == pytest.approx(sans.equity.iloc[-1], rel=1e-12)
+        assert avec.costs.sum() == pytest.approx(sans.costs.sum(), rel=1e-12)
+
+    def test_avec_levier_la_marge_degrade_la_performance(self, runs):
+        assert runs[(1.5, 600.0)].equity.iloc[-1] < runs[(1.5, 0.0)].equity.iloc[-1]
+
+    def test_la_marge_apparait_dans_les_frais(self, runs):
+        """Elle est prelevee comme un frais, donc elle se LIT dans le rapport
+        au lieu de disparaitre silencieusement dans la performance."""
+        assert runs[(1.5, 600.0)].costs.sum() > runs[(1.5, 0.0)].costs.sum()
+
+    def test_le_cout_est_proportionnel_a_la_part_empruntee(self, runs):
+        """Emprunter deux fois plus coute deux fois plus. Le test qui distingue
+        "un cout est preleve" de "le BON cout est preleve".
+
+        A exposition 1,25 on emprunte 0,25 ; a 1,50 on emprunte 0,50.
+        """
+        cout_peu = (runs[(1.25, 400.0)].costs - runs[(1.25, 0.0)].costs).sum()
+        cout_double = (runs[(1.5, 400.0)].costs - runs[(1.5, 0.0)].costs).sum()
+        assert cout_peu > 0
+        assert cout_double == pytest.approx(2 * cout_peu, rel=0.05)

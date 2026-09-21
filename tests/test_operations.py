@@ -86,9 +86,18 @@ def _ops(cfg, panneau, api):
 
 @pytest.fixture
 def cfg_ops(base_config):
+    """Base NEUTRE : `defi.active` est pinne a False explicitement.
+
+    Il etait herite de `config/us.yaml`. Le jour ou le fichier est passe a
+    `true`, `test_absent_quand_le_mode_est_inactif` s'est mis a echouer sans
+    qu'aucun code metier n'ait bouge - et, pire, les tests de cette classe se
+    sont mis a ecrire un vrai `data/defi_etat.json` dans le depot. Un test qui
+    herite d'un interrupteur ne teste pas l'etat qu'il annonce.
+    """
     return base_config.with_overrides({
         "universe.benchmark": "^BENCH", "data.min_history_days": 300,
-        "portfolio.top_n": 5, "regime.enabled": False})
+        "portfolio.top_n": 5, "regime.enabled": False,
+        "defi.active": False})
 
 
 def _controle(etat, nom):
@@ -440,8 +449,25 @@ class TestGardeFousDuDefi:
         return cfg
 
     def test_absent_quand_le_mode_est_inactif(self, cfg_ops, panneau):
+        """`cfg_ops` pinne `defi.active` a False : cette assertion porte donc
+        sur le CODE, pas sur ce que contient `config/us.yaml` aujourd'hui."""
+        assert cfg_ops.get("defi.active") is False, "le fixture ne neutralise plus rien"
         etat = _ops(cfg_ops, panneau, FauxApi()).etat()
         assert all(c["nom"] != "Limites du defi" for c in etat["controles"])
+
+    def test_la_config_expediee_allume_les_garde_fous(self, base_config):
+        """Et le pendant : ce que le projet EXPEDIE reellement.
+
+        Separe du test precedent a dessein. Un garde-fou eteint ne rend pas le
+        bot moins rentable, il rend la limite invisible - et c'est exactement
+        ce qui etait en place : `defi.active: false` sur le compte remis a zero
+        pour mesurer le defi.
+        """
+        assert base_config.get("defi.active") is True
+        assert base_config.get("defi.reference") == "statique"
+        # Marge sous les seuils contractuels du defi vise (-5 % / -10 %).
+        assert base_config.get("defi.perte_jour_max") < 0.05
+        assert base_config.get("defi.perte_totale_max") < 0.10
 
     def test_present_et_vert_sur_un_compte_sain(self, cfg_ops, panneau, tmp_path,
                                                 monkeypatch):
@@ -500,3 +526,323 @@ class TestGardeFousDuDefi:
             etat = _ops(cfg, panneau, FauxApi(equity=101_000.0, veille=101_500.0)).etat()
             c = _controle(etat, "Limites du defi")
             assert c["ok"] is attendu_ok, (reference, c["detail"])
+
+class TestAmorcage:
+    """L'entree initiale sur un compte vide.
+
+    Le bot n'agissait qu'aux dates de rebalancement. Sur un compte neuf, cela
+    voulait dire ne rien detenir jusqu'au prochain signal - une semaine en
+    hebdomadaire, jusqu'a un mois en mensuel. Ce n'est pas la strategie qui se
+    protege, c'est une machine qui n'a jamais demarre.
+    """
+
+    def _cfg(self, base, **kw):
+        cfg = base.copy()
+        for k, v in kw.items():
+            cfg.set(k, v)
+        return cfg
+
+    def test_un_compte_vide_peut_entrer_hors_jour_de_signal(self, cfg_ops, panneau):
+        etat = _ops(cfg_ops, panneau, FauxApi(positions={})).etat()
+        c = _controle(etat, "Jour de rebalancement")
+        assert etat["amorcage"] is True
+        assert c["ok"], c["detail"]
+        assert "amorcage" in c["detail"]
+        assert etat["ordres"], "un compte vide doit avoir des ordres a passer"
+
+    def test_un_compte_deja_investi_attend_son_signal(self, cfg_ops, panneau):
+        """L'amorcage ne doit PAS devenir un rebalancement permanent."""
+        api = FauxApi(positions={"T01": 50.0}, marche={"T01": 90_000.0})
+        etat = _ops(cfg_ops, panneau, api).etat()
+        assert etat["amorcage"] is False
+
+    def test_hors_jour_de_signal_et_deja_investi_le_controle_est_rouge(
+            self, cfg_ops, panneau):
+        """Le cas qui manquait : compte plein, jour ordinaire. Le controle DOIT
+        bloquer, sinon le bot rebalancerait n'importe quand.
+
+        On cherche une seance qui n'est pas un jour d'execution ; le panneau
+        du fixture se termine justement sur un jour de signal, ce qui masquait
+        completement ce chemin - une premiere version du test s'en remettait a
+        un `if not c["ok"]` et n'affirmait donc rien.
+        """
+        from quantbot import live
+
+        idx = panneau["T00"].index
+        trouve = None
+        for recul in range(1, 12):
+            jour = idx[-recul]
+            tronque = {t: df.loc[:jour] for t, df in panneau.items()}
+            cible = live.portefeuille_cible(tronque, cfg_ops, aujourdhui=jour)
+            if not cible.est_jour_execution:
+                trouve = tronque
+                break
+        assert trouve is not None, "aucune seance ordinaire trouvee dans la fenetre"
+
+        api = FauxApi(positions={"T01": 50.0}, marche={"T01": 90_000.0})
+        etat = _ops(cfg_ops, trouve, api).etat()
+        assert etat["amorcage"] is False
+        c = _controle(etat, "Jour de rebalancement")
+        assert not c["ok"], c["detail"]
+        assert "amorcage" not in c["detail"]
+
+    def test_desactivable(self, cfg_ops, panneau):
+        cfg = self._cfg(cfg_ops, **{"execution.amorcage": False})
+        etat = _ops(cfg, panneau, FauxApi(positions={})).etat()
+        assert etat["amorcage"] is False
+
+    def test_une_cible_vide_n_amorce_rien(self, cfg_ops, panneau):
+        """Si la cible est vide - regime en liquidites, univers inexploitable -
+        un compte vide est le portefeuille CORRECT. Amorcer dans ce cas
+        reviendrait a inventer une position que la strategie ne demande pas.
+
+        L'assertion est SECHE : une premiere version ecrivait
+        `not c["ok"] or not etat["ordres"]`, et ce `or` laissait passer la
+        mutation qu'elle devait attraper - sans cible, il n'y a de toute facon
+        aucun ordre, donc la seconde branche etait vraie quoi qu'il arrive.
+        """
+        cfg = self._cfg(cfg_ops, **{"portfolio.top_n": 0})
+        etat = _ops(cfg, panneau, FauxApi(positions={})).etat()
+        c = _controle(etat, "Jour de rebalancement")
+        assert len(etat["cible"]) == 0, "le test ne teste rien si la cible n'est pas vide"
+        assert not c["ok"], c["detail"]
+        assert "impossible" in c["detail"]
+        assert not etat["ordres"]
+
+    def test_un_signal_impose_desactive_l_amorcage(self, cfg_ops, panneau):
+        """Quand le robot impose sa seance, il sait ce qu'il fait : on ne lui
+        substitue pas une autre date dans son dos."""
+        import pandas as pd
+        idx = panneau["T00"].index
+        etat = _ops(cfg_ops, panneau, FauxApi(positions={})).etat(signal=idx[-3])
+        assert etat["amorcage"] is False
+
+
+class TestCompteVide:
+    """La methode que `robot.py` appelait avant qu'elle n'existe.
+
+    `compte_vide` etait une VARIABLE LOCALE de `etat()`. `robot.py` appelait
+    `ops.compte_vide()`, ce qui levait un `AttributeError` au tout debut de la
+    passe - apres la mise a jour des cours, avant toute decision. Le
+    planificateur relancait, le traceback repartait dans
+    `data/robot_sortie.log`, et rien n'etait jamais envoye.
+
+    Une methode publique appelee depuis un script n'est couverte par aucun test
+    du module : c'est exactement le trou par lequel ce bug est passe.
+    """
+
+    def test_un_compte_sans_position_est_vide(self, cfg_ops, panneau):
+        assert _ops(cfg_ops, panneau, FauxApi(positions={})).compte_vide() is True
+
+    def test_un_compte_investi_ne_l_est_pas(self, cfg_ops, panneau):
+        api = FauxApi(positions={"T01": 50.0}, marche={"T01": 90_000.0})
+        assert _ops(cfg_ops, panneau, api).compte_vide() is False
+
+    def test_une_poussiere_ne_remplit_pas_un_compte(self, cfg_ops, panneau):
+        """Le seuil de 1 % n'est pas zero a dessein : une fraction de titre
+        oubliee a 3 dollars sur 100 000 ne fait pas d'un compte vide un compte
+        investi - et laisserait le bot a l'arret pour toujours."""
+        api = FauxApi(positions={"T01": 0.03}, marche={"T01": 3.0})
+        assert _ops(cfg_ops, panneau, api).compte_vide() is True
+
+    def test_le_robot_peut_l_appeler(self, cfg_ops, panneau):
+        """L'assertion qui aurait attrape le bug : la methode existe et repond
+        sans qu'on lui passe quoi que ce soit."""
+        ops = _ops(cfg_ops, panneau, FauxApi(positions={}))
+        assert callable(getattr(ops, "compte_vide", None))
+        assert isinstance(ops.compte_vide(), bool)
+
+
+class TestVerrouEtLiquidation:
+    """Ce que le garde-fou FAIT, au-dela de ce qu'il constate.
+
+    L'ancienne version bloquait l'envoi et s'arretait la. A -8 %, le bot se
+    figeait donc avec vingt lignes longues dans le marche qui venait de
+    declencher la limite, et glissait vers les -10 % du contrat sans rien
+    pouvoir faire. Geler les achats n'est pas sortir.
+    """
+
+    def _cfg(self, base, **kw):
+        cfg = base.copy()
+        cfg.set("defi.active", True, strict=True)
+        for k, v in kw.items():
+            cfg.set("defi." + k, v, strict=True)
+        return cfg
+
+    @pytest.fixture(autouse=True)
+    def _etat_isole(self, tmp_path, monkeypatch):
+        """Aucun test ne doit ecrire dans `data/` du depot.
+
+        Deux fichiers, pas un. `defi_etat.json` etait evident ; `solder()`
+        journalise ses ordres, et la premiere version de ces tests a donc
+        ajoute cinq liquidations fictives au vrai `data/journal_ordres.csv` -
+        ce qui, en prime, a fait passer un test de `test_journal.py` qui se
+        contentait jusque-la de se sauter faute de journal. Un test qui modifie
+        le decor des autres ne teste plus ce qu'il annonce.
+        """
+        from quantbot import defi, operations
+        monkeypatch.setattr(defi, "ETAT_DEFI", tmp_path / "d.json")
+        monkeypatch.setattr(operations, "JOURNAL", tmp_path / "journal.csv")
+        return tmp_path / "d.json"
+
+    def test_solder_annule_puis_vend_toutes_les_positions(self, cfg_ops, panneau):
+        api = FauxApi(positions={"T01": 50.0, "T02": 30.0},
+                      marche={"T01": 5000.0, "T02": 3000.0},
+                      en_vol=[{"id": "o1", "symbol": "T03"}])
+        rapport = _ops(self._cfg(cfg_ops), panneau, api).solder()
+        assert rapport["ok"] and rapport["soldes"] == 2
+        assert rapport["annules"] == 1
+        assert sorted(api.envoyes) == [("T01", "sell"), ("T02", "sell")]
+
+    def test_solder_rachete_une_position_courte(self, cfg_ops, panneau):
+        """La strategie n'en prend pas, mais une liquidation qui laisserait une
+        ligne ouverte parce qu'elle est du mauvais signe n'est pas une
+        liquidation."""
+        api = FauxApi(positions={"T01": -10.0}, marche={"T01": -1000.0})
+        _ops(self._cfg(cfg_ops), panneau, api).solder()
+        assert api.envoyes == [("T01", "buy")]
+
+    def test_solder_ignore_les_poussieres(self, cfg_ops, panneau):
+        """Un ordre a quantite nulle est refuse par le courtier a chaque
+        passage, indefiniment."""
+        api = FauxApi(positions={"T01": 1e-9}, marche={"T01": 0.0001})
+        rapport = _ops(self._cfg(cfg_ops), panneau, api).solder()
+        assert api.envoyes == [] and rapport["ignores"]
+
+    def test_une_breche_declenche_la_liquidation(self, cfg_ops, panneau):
+        api = FauxApi(equity=91_000.0, veille=100_000.0,
+                      positions={"T01": 50.0}, marche={"T01": 45_000.0})
+        ops = _ops(self._cfg(cfg_ops), panneau, api)
+        applique = ops.appliquer_defi()
+        assert applique["verrou"]["raison"] == "perte"
+        assert api.envoyes == [("T01", "sell")]
+
+    def test_marche_ferme_reporte_la_liquidation_sans_perdre_la_consigne(
+            self, cfg_ops, panneau, _etat_isole):
+        """Un ordre au marche envoye hors seance est refuse, ou execute a
+        l'ouverture a un cours qu'on n'a pas vu. On garde la consigne."""
+        from quantbot import defi
+        api = FauxApi(equity=91_000.0, veille=100_000.0, ouvert=False,
+                      positions={"T01": 50.0}, marche={"T01": 45_000.0})
+        applique = _ops(self._cfg(cfg_ops), panneau, api).appliquer_defi()
+        assert api.envoyes == []
+        assert "marche ferme" in applique["message"]
+        assert defi.lire_etat(_etat_isole)["a_solder"] is True
+
+        # A la seance suivante, la consigne en attente part enfin.
+        api2 = FauxApi(equity=91_000.0, veille=91_000.0, ouvert=True,
+                       positions={"T01": 50.0}, marche={"T01": 45_000.0})
+        _ops(self._cfg(cfg_ops), panneau, api2).appliquer_defi()
+        assert api2.envoyes == [("T01", "sell")]
+
+    def test_la_liquidation_ne_part_qu_une_fois(self, cfg_ops, panneau):
+        """Sans cela, la veille intraday renverrait des ordres de vente toutes
+        les trente minutes jusqu'a la fin de la seance."""
+        cfg = self._cfg(cfg_ops)
+        api = FauxApi(equity=91_000.0, veille=100_000.0,
+                      positions={"T01": 50.0}, marche={"T01": 45_000.0})
+        _ops(cfg, panneau, api).appliquer_defi()
+        assert len(api.envoyes) == 1
+
+        api2 = FauxApi(equity=91_000.0, veille=91_000.0, positions={})
+        _ops(cfg, panneau, api2).appliquer_defi()
+        assert api2.envoyes == [], "la liquidation est repartie une seconde fois"
+
+    def test_la_liquidation_ne_repart_pas_quand_le_verdict_est_FOURNI(
+            self, cfg_ops, panneau):
+        """Le meme invariant, mais par le chemin qu'emprunte `veille_defi.py`.
+
+        Ce script calcule le verdict lui-meme et le passe a `appliquer_defi`.
+        Il ecrivait l'etat APRES l'appel, ce qui reposait `a_solder` a vrai par
+        dessus le `marquer_solde()` qui venait de l'eteindre : les ventes
+        repartaient toutes les trente minutes pendant toute la seance.
+
+        Le test precedent ne le voyait pas - il passe par `verdict=None`, ou
+        l'ecriture etait deja au bon endroit. Deux chemins, un seul invariant,
+        et c'est celui qui n'etait pas teste qui etait casse.
+        """
+        from quantbot import defi
+        cfg = self._cfg(cfg_ops)
+        params = defi.parametres(cfg)
+
+        api = FauxApi(equity=91_000.0, veille=100_000.0,
+                      positions={"T01": 50.0}, marche={"T01": 45_000.0})
+        v1 = defi.evaluer(91_000.0, 100_000.0, params, defi.lire_etat())
+        _ops(cfg, panneau, api).appliquer_defi(verdict=v1)
+        assert api.envoyes == [("T01", "sell")]
+
+        api2 = FauxApi(equity=91_000.0, veille=91_000.0, positions={})
+        v2 = defi.evaluer(91_000.0, 91_000.0, params, defi.lire_etat())
+        _ops(cfg, panneau, api2).appliquer_defi(verdict=v2)
+        assert api2.envoyes == [], "la liquidation est repartie au passage suivant"
+
+    def test_solder_sur_verrou_desactive_gele_sans_vendre(self, cfg_ops, panneau):
+        api = FauxApi(equity=91_000.0, veille=100_000.0,
+                      positions={"T01": 50.0}, marche={"T01": 45_000.0})
+        applique = _ops(self._cfg(cfg_ops, solder_sur_verrou=False),
+                        panneau, api).appliquer_defi()
+        assert applique["verrou"] is not None
+        assert api.envoyes == [], "solder_sur_verrou est false et le bot a vendu"
+
+    def test_LE_piege_un_compte_solde_n_est_pas_un_compte_neuf(self, cfg_ops, panneau):
+        """Le bug le plus couteux que ce verrou evite.
+
+        Solder laisse le compte VIDE, ce qui est exactement la condition
+        d'amorcage. Sans verrou, la sequence complete etait : perte -> le bot
+        vend tout -> compte vide -> "tiens, un compte neuf" -> rachat du
+        portefeuille entier au passage suivant, dans le marche meme qui venait
+        de declencher la limite de perte.
+        """
+        from quantbot import defi
+        cfg = self._cfg(cfg_ops)
+        # Compte vide ET verrouille : les deux conditions du piege.
+        _ops(cfg, panneau, FauxApi(equity=91_000.0, veille=100_000.0,
+                                   positions={"T01": 50.0},
+                                   marche={"T01": 45_000.0})).appliquer_defi()
+        assert defi.est_verrouille(defi.lire_etat())
+
+        etat = _ops(cfg, panneau, FauxApi(equity=91_000.0, veille=91_000.0,
+                                          positions={})).etat()
+        assert etat["amorcage"] is False, "l'amorcage a rachete un compte verrouille"
+        assert not _controle(etat, "Limites du defi")["ok"]
+
+    def test_le_verrou_survit_au_rebond_dans_les_controles(self, cfg_ops, panneau):
+        """Le verdict du disque prime sur la valeur du jour : un defi franchi
+        est franchi, meme si le compte est remonte depuis."""
+        cfg = self._cfg(cfg_ops)
+        _ops(cfg, panneau, FauxApi(equity=91_000.0, veille=100_000.0)).etat()
+        etat = _ops(cfg, panneau, FauxApi(equity=120_000.0, veille=91_000.0)).etat()
+        c = _controle(etat, "Limites du defi")
+        assert not c["ok"] and "VERROU" in c["detail"]
+
+    def test_l_envoi_reste_bloque_sous_verrou_meme_en_forcant(self, cfg_ops, panneau):
+        cfg = self._cfg(cfg_ops)
+        _ops(cfg, panneau, FauxApi(equity=91_000.0, veille=100_000.0)).etat()
+        api = FauxApi(equity=120_000.0, veille=91_000.0, positions={})
+        res = _ops(cfg, panneau, api).envoyer(forcer=True)
+        assert not res["ok"] and "Limites du defi" in res["message"]
+        assert api.envoyes == []
+
+    def test_objectif_atteint_arrete_et_solde(self, cfg_ops, panneau, _etat_isole):
+        """La phase est acquise : chaque seance de plus ne peut que la
+        reprendre.
+
+        Le depart est ECRIT a l'avance : sans cela le premier passage fixerait
+        `capital_depart` a la valeur du jour et la progression serait nulle par
+        construction - un piege que ce test a commence par y tomber.
+        """
+        from quantbot import defi
+        defi.ecrire_etat({"capital_depart": 100_000.0, "plus_haut": 100_000.0},
+                         _etat_isole)
+        api = FauxApi(equity=109_000.0, veille=108_000.0,
+                      positions={"T01": 50.0}, marche={"T01": 100_000.0})
+        applique = _ops(self._cfg(cfg_ops, objectif=0.08),
+                        panneau, api).appliquer_defi()
+        assert applique["verrou"]["raison"] == "objectif"
+        assert api.envoyes == [("T01", "sell")]
+
+    def test_mode_inactif_ne_fait_rien_du_tout(self, cfg_ops, panneau):
+        api = FauxApi(equity=50_000.0, veille=100_000.0, positions={"T01": 50.0})
+        applique = _ops(cfg_ops, panneau, api).appliquer_defi()
+        assert applique["actif"] is False
+        assert api.envoyes == []

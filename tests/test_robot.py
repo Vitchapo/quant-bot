@@ -50,6 +50,45 @@ class TestDecision:
         etat = {"dernier_signal": "2026-08-31"}
         assert robot.decider(etat, SIGNAL, 1)[0] == robot.EXECUTER
 
+    def test_un_compte_vide_entre_meme_hors_rattrapage(self):
+        """Le chemin qui laissait le compte neuf a zero.
+
+        `passer()` s'arrete sur le verdict de `decider` et n'atteint jamais
+        l'amorcage de `operations.etat()`. Un compte remis a zero un vendredi
+        soir, un robot relance le jeudi suivant : 4 seances, au-dela du
+        rattrapage de 3 -> le signal etait SAUTE, et `dernier_signal` ecrit,
+        donc aucune reprise avant la periode suivante.
+
+        La regle du rattrapage protege contre le brassage d'un portefeuille
+        existant sur un classement perime. Sans position, il n'y a rien a
+        brasser.
+        """
+        for seances in (4, 9, 40):
+            assert robot.decider({}, SIGNAL, seances)[0] == robot.TROP_TARD
+            assert robot.decider({}, SIGNAL, seances,
+                                 compte_vide=True)[0] == robot.EXECUTER
+
+    def test_un_compte_vide_ne_contourne_PAS_les_autres_regles(self):
+        """Il leve le rattrapage, et RIEN d'autre.
+
+        En particulier il ne doit pas rejouer un signal deja traite : le compte
+        peut etre vide parce que les ordres ont ete refuses, et reenvoyer en
+        boucle a chaque passage du planificateur serait pire que d'attendre.
+        Il ne doit pas non plus executer le jour meme du signal : ce serait une
+        autre strategie que celle qui a ete mesuree.
+        """
+        etat = {"dernier_signal": "2026-09-30", "dernier_passage": "2026-10-01T21:00"}
+        assert robot.decider(etat, SIGNAL, 9, compte_vide=True)[0] == robot.DEJA_FAIT
+        assert robot.decider({}, SIGNAL, 0, compte_vide=True)[0] == robot.ATTENDRE
+        assert robot.decider({}, None, 0, compte_vide=True)[0] == robot.AUCUN
+
+    def test_la_raison_dit_que_c_est_une_entree_initiale(self):
+        """Le compte rendu est lu par quelqu'un qui n'etait pas la. "executer"
+        sans explication, sur un signal au-dela du rattrapage, se lit comme un
+        bug."""
+        _, raison = robot.decider({}, SIGNAL, 9, compte_vide=True)
+        assert "vide" in raison.lower() and "initiale" in raison.lower()
+
     def test_chaque_decision_porte_une_raison_lisible(self):
         for signal, seances in ((None, 0), (SIGNAL, 0), (SIGNAL, 1), (SIGNAL, 99)):
             _, raison = robot.decider({}, signal, seances)
@@ -94,3 +133,43 @@ class TestAucunAccesALArgentReel:
         from quantbot.operations import Operations
         import inspect
         assert "reel=False" in inspect.getsource(Operations.api.fget)
+
+
+class TestLAppelQuiNExistaitPas:
+    """Le bug du 17 septembre 2026, et le test qui l'aurait vu venir.
+
+    `robot.py` appelait `ops.compte_vide()`. Or `compte_vide` etait une
+    VARIABLE LOCALE de `Operations.etat()`, pas une methode. Chaque passage
+    levait donc `AttributeError: 'Operations' object has no attribute
+    'compte_vide'` a la ligne 200 - apres la mise a jour des cours, avant
+    toute decision. Le planificateur relancait, le traceback repartait dans
+    `data/robot_sortie.log`, et rien n'etait jamais envoye.
+
+    Aucun test ne couvrait ce chemin : `decider` est testee en profondeur mais
+    c'est une fonction pure, et l'appel fautif etait DANS `passer()`, entre le
+    telechargement et la decision. Le trou n'etait pas dans la logique, il
+    etait a la couture entre deux modules tous les deux bien testes.
+    """
+
+    def test_la_methode_appelee_par_le_robot_existe(self):
+        """Un test de couture : le contrat entre `robot.py` et `Operations`.
+
+        Deliberement plus large qu'une verification d'attribut - il liste ce
+        que le robot attend du module operations, pour que retirer l'une de ces
+        methodes casse ici plutot qu'en production a 21:00.
+        """
+        from quantbot.operations import Operations
+        for nom in ("compte_vide", "etat", "envoyer", "rafraichir",
+                    "appliquer_defi", "solder", "disponible"):
+            methode = getattr(Operations, nom, None)
+            assert callable(methode), "Operations.%s() manque : robot.py l'appelle" % nom
+
+    def test_le_robot_consulte_bien_le_verrou_avant_les_cours(self):
+        """Le verrou est sur disque : inutile de telecharger 500 series et de
+        recalculer un score pour apprendre qu'on n'enverra rien."""
+        import inspect
+        source = inspect.getsource(robot.passer)
+        pos_verrou = source.index("est_verrouille")
+        pos_fetch = source.index("rafraichir")
+        assert pos_verrou < pos_fetch, ("le robot met les cours a jour avant de "
+                                        "regarder le verrou")

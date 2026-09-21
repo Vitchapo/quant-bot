@@ -16,17 +16,43 @@ from quantbot import edge
 
 @pytest.fixture(scope="module")
 def cfg_syn(base_config):
+    """La CADENCE est pinnee. Elle etait heritee de `config/us.yaml`, et le
+    passage du fichier en `weekly` a rendu degenere le test de chronologie :
+    avec un delai de 5 seances, l'execution tombe sur le signal suivant, la
+    fenetre de mesure est vide et l'IC ne se calcule plus du tout."""
     return base_config.with_overrides({
         "universe.benchmark": "^SYN", "data.min_history_days": 260,
         "portfolio.top_n": 10, "regime.enabled": False,
         "factors.low_volatility.weight": 0.0, "factors.trend.weight": 0.0,
-        "factors.min_valid_factors": 1})
+        "factors.min_valid_factors": 1, "execution.rebalance": "monthly"})
 
 
 def _ligne(df, contient):
     sub = df[df["facteur"].str.contains(contient, case=False)]
     assert len(sub) == 1, "facteur %r introuvable dans %s" % (contient, list(df["facteur"]))
     return sub.iloc[0]
+
+
+class TestFenetreDeMesureVide:
+    """Delai >= cadence : il n'y a plus d'intervalle a mesurer.
+
+    Ce n'est pas theorique. `config/us.yaml` est passe en `weekly` pour
+    satisfaire le minimum de 5 jours de negociation du defi, et un delai de
+    5 seances suffit alors a vider toutes les fenetres. L'outil renvoyait un
+    DataFrame SANS COLONNES et l'appelant explosait sur un KeyError - un outil
+    de mesure qui echoue de facon confuse laisse croire qu'on a mesure.
+    """
+
+    def test_le_tableau_est_vide_mais_exploitable(self, momentum_prices, cfg_syn):
+        cfg = cfg_syn.with_overrides({"execution.rebalance": "weekly",
+                                      "execution.execution_lag": 5})
+        with pytest.warns(UserWarning, match="aucun IC calculable"):
+            ic = edge.information_coefficient(momentum_prices, cfg)
+        assert len(ic) == 0
+        # Le point du test : les colonnes existent, donc l'appelant obtient un
+        # tableau vide au lieu d'une exception.
+        assert list(ic.columns) == edge.COLONNES_IC
+        assert ic["facteur"].tolist() == []
 
 
 class TestInformationCoefficient:

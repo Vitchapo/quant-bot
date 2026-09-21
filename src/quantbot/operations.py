@@ -291,6 +291,31 @@ class Operations:
         except Exception as exc:
             return {"ok": False, "erreur": str(exc)}
 
+    # -- le compte est-il vide ? ------------------------------------------
+    def compte_vide(self, equity=None, detail=None) -> bool:
+        """Moins de 1 % de la valeur du compte est investi.
+
+        Cette methode existe parce que `robot.py` l'appelait avant qu'elle
+        n'existe : `compte_vide` etait une VARIABLE LOCALE de `etat()`, et
+        `ops.compte_vide()` levait donc un `AttributeError` qui arretait le
+        robot au tout debut de sa passe - apres la mise a jour des cours,
+        avant toute decision. Le planificateur relancait, le traceback
+        repartait dans `data/robot_sortie.log`, et rien n'etait envoye.
+
+        Le seuil de 1 % n'est pas zero a dessein : une fraction de titre
+        oubliee a 3 dollars sur un compte de 100 000 ne fait pas d'un compte
+        vide un compte investi.
+
+        `equity` et `detail` sont acceptes pour que `etat()`, qui les a deja
+        obtenus, ne repose pas deux fois les memes questions au courtier.
+        """
+        if detail is None:
+            detail = self.api.positions_detail()
+        if equity is None:
+            equity = float(self.api.compte().get("equity", 0.0) or 0.0)
+        valeur = sum(abs(float(p.get("market_value", 0.0) or 0.0)) for p in detail)
+        return valeur <= 0.01 * max(float(equity), 1e-9)
+
     # -- etat complet ------------------------------------------------------
     def etat(self, signal=None) -> dict:
         """`signal` impose la seance de decision.
@@ -317,6 +342,62 @@ class Operations:
             en_vol = []
 
         prices = self._charger_prix()
+
+        # -- garde-fous du defi (inactifs par defaut) -----------------------
+        #
+        # Evalues ICI, avant l'amorcage, et pas plus bas comme avant : leur
+        # verdict est une ENTREE de la decision d'amorcage. Un compte qui vient
+        # d'etre solde sur verrou est un compte vide, donc un candidat parfait a
+        # l'amorcage - qui rachetait tout le portefeuille le lendemain matin,
+        # dans le marche meme qui venait de declencher la limite. Le verrou doit
+        # etre connu avant qu'on se demande si le compte est "neuf".
+        garde_defi, verdict_defi = None, None
+        params_defi = defi.parametres(self.cfg)
+        if params_defi is not None:
+            verdict_defi = defi.evaluer(
+                equity, float(compte.get("last_equity", 0.0) or 0.0),
+                params_defi, defi.lire_etat())
+            defi.ecrire_etat(verdict_defi["etat"])
+            garde_defi = {"nom": "Limites du defi", "ok": verdict_defi["ok"],
+                          "detail": verdict_defi["raison"]
+                                    or defi.resume(verdict_defi, params_defi)}
+
+        # -- AMORCAGE : un compte neuf ne doit pas attendre le prochain signal
+        #
+        # Sans cela, un compte vide reste 100 % en liquidites jusqu'au
+        # prochain rebalancement - une semaine en hebdomadaire, jusqu'a un
+        # mois en mensuel. Ce n'est pas la strategie qui se protege, c'est une
+        # machine qui n'a jamais demarre, et les statistiques mesurees sur
+        # cette periode ne mesurent rien du tout.
+        #
+        # Ce n'est PAS un rebalancement force : on entre sur la cible du
+        # dernier signal ECHU, c'est-a-dire exactement le portefeuille que le
+        # backtest detiendrait aujourd'hui. Le backtest aussi entre a une date
+        # arbitraire - celle ou son historique commence. La CADENCE n'est pas
+        # touchee : le prochain rebalancement reste a sa date.
+        #
+        # Deux conditions, et les deux comptent. Le compte doit etre reellement
+        # vide (moins de 1 % investi), et la cible doit contenir quelque chose :
+        # si le filtre de regime dit "liquidites", un compte vide est le
+        # portefeuille CORRECT, pas une machine en panne.
+        # Et la troisieme, ajoutee apres coup : aucun VERROU de defi ne doit
+        # etre pose. Un compte vide sous verrou n'est pas une machine qui n'a
+        # jamais demarre, c'est une machine qu'on vient d'arreter.
+        vide = self.compte_vide(equity=equity, detail=detail)
+        verrouille = bool(verdict_defi and verdict_defi.get("verrou"))
+        amorcage = False
+        if (vide and signal is None and not verrouille
+                and self.cfg.get("execution.amorcage", True)):
+            try:
+                close = live._prepare_prices(prices, self.cfg)[0]
+                echus = live.signaux_echus(
+                    close.index, self.cfg.get("execution.rebalance", "monthly"))
+                if len(echus):
+                    signal = echus[-1]
+                    amorcage = True
+            except Exception:
+                amorcage = False
+
         cible = live.portefeuille_cible(prices, self.cfg, forcer_signal=signal)
         cours = {t: float(v) for t, v in cible.cours.items()}
         cibles = {t: float(p) for t, p in cible.poids.items()}
@@ -340,16 +421,6 @@ class Operations:
         valeur_marche = sum(float(p["market_value"]) for p in detail)
         ecart_valo = (abs(valeur_cache - valeur_marche) / valeur_marche) if valeur_marche else 0.0
 
-        # -- garde-fous du defi (inactifs par defaut) -----------------------
-        garde_defi = None
-        params_defi = defi.parametres(self.cfg)
-        if params_defi is not None:
-            v = defi.evaluer(equity, float(compte.get("last_equity", 0.0) or 0.0),
-                             params_defi, defi.lire_etat())
-            defi.ecrire_etat(v["etat"])
-            garde_defi = {"nom": "Limites du defi", "ok": v["ok"],
-                          "detail": v["raison"] or defi.resume(v, params_defi)}
-
         # -- controles, dans l'ordre ou trade.py les applique ---------------
         plafond = float(self.cfg.get("broker.max_echange_par_seance", 2.0))
         besoin_marge = resume["achats"] - resume["ventes"] - liquidites
@@ -364,9 +435,20 @@ class Operations:
                        if cible.anciennete_donnees == 0 else
                        ("derniere cloture %s, %d seance(s) manquante(s)"
                         % (cible.as_of.date(), cible.anciennete_donnees))},
+            # En amorcage, `est_jour_execution` est artificiellement vrai : on
+            # a IMPOSE le signal. Le dire autrement serait mentir sur ce qui se
+            # passe. Les deux branches sont donc separees - une premiere version
+            # affichait "oui, signal du ..." en s'appuyant sur un drapeau qu'elle
+            # venait elle-meme de forcer.
             {"nom": "Jour de rebalancement",
-             "ok": bool(cible.est_jour_execution),
-             "detail": ("oui, signal du %s" % cible.date_signal.date())
+             "ok": (bool(amorcage and len(cible.poids)) if amorcage
+                    else bool(cible.est_jour_execution)),
+             "detail": ("amorcage : compte vide, entree initiale sur le signal "
+                        "du %s" % cible.date_signal.date()) if amorcage and len(cible.poids)
+                       else ("amorcage impossible : la cible est vide "
+                             "(filtre de regime), un compte en liquidites est correct")
+                       if amorcage
+                       else ("oui, signal du %s" % cible.date_signal.date())
                        if cible.est_jour_execution else
                        "non : %s, prochain signal a la derniere seance de la periode"
                        % self.cfg.get("execution.rebalance")},
@@ -440,6 +522,9 @@ class Operations:
             "donnees": {"derniere_cloture": str(cible.as_of.date()),
                         "anciennete": cible.anciennete_donnees},
             "regime": {"texte": cible.regime_texte, "actif": cible.regime_actif},
+            # Expose pour que le tableau de bord et les tests puissent
+            # distinguer une entree initiale d'un rebalancement ordinaire.
+            "amorcage": bool(amorcage),
             "date_decision": str(cible.date_decision.date()) if cible.date_decision is not None else None,
             "cible": [{"ticker": t, "poids": float(p),
                        "cours": cours.get(t), "detenu": float(positions.get(t, 0.0))}
@@ -450,6 +535,10 @@ class Operations:
             "resume": resume,
             "seuil": seuil,
             "controles": controles,
+            # Le verdict brut du defi, pour que l'appelant sache non seulement
+            # qu'il est bloque mais POURQUOI, et s'il reste des positions a
+            # solder. Absent quand le mode defi est inactif.
+            "defi": verdict_defi,
             "pret": all(c["ok"] for c in controles if c["nom"] != "Jour de rebalancement"),
         }
 
@@ -525,6 +614,164 @@ class Operations:
             return {"ok": True, "message": "%d ordre(s) en attente annule(s)." % n}
         except Exception as exc:
             return {"ok": False, "message": str(exc)}
+
+    # -- sortie d'urgence --------------------------------------------------
+    def solder(self, motif: str = "verrou du defi") -> dict:
+        """Annule les ordres en vol puis SOLDE toutes les positions, au marche.
+
+        Le seul chemin du projet qui vende sans consulter la strategie, et la
+        seule chose qui compte ici est la vitesse : on ne cherche ni le bon
+        cours, ni le bon ordonnancement, ni a economiser des frais. Entre -8 %
+        (le garde-fou) et -10 % (le contrat), il reste deux points ; les
+        depenser en finesse d'execution serait absurde.
+
+        Annuler AVANT de vendre n'est pas cosmetique. Un ordre d'achat encore
+        en vol peut s'executer pendant la liquidation et rouvrir une ligne
+        qu'on vient de fermer ; et un ordre de vente en vol immobilise les
+        titres (`held_for_orders`), ce qui ferait refuser la vente de solde.
+
+        `quantite` et non `montant` : un ordre en montant laisse derriere lui
+        une poussiere de position, et une poussiere n'est pas une sortie.
+
+        Chaque ordre est journalise avec le motif "solde (verrou)", pour que la
+        reconciliation d'executions ne prenne pas une liquidation d'urgence
+        pour un rebalancement rate.
+        """
+        rapport = {"ok": True, "annules": 0, "soldes": 0, "echecs": [],
+                   "ignores": [], "message": ""}
+        try:
+            en_vol = self.api.ordres_ouverts()
+        except Exception:
+            en_vol = []
+        if en_vol:
+            try:
+                self.api.annuler_ordres()
+                rapport["annules"] = len(en_vol)
+            except Exception as exc:
+                rapport["ok"] = False
+                rapport["echecs"].append({"ticker": "-", "raison": "annulation : %s"
+                                                                  % str(exc)[:120]})
+
+        try:
+            detail = self.api.positions_detail()
+            numero = str(self.api.compte().get("account_number", ""))
+        except Exception as exc:
+            rapport.update({"ok": False, "message": "courtier injoignable : %s"
+                                                    % str(exc)[:160]})
+            return rapport
+
+        horodatage = datetime.now().isoformat(timespec="seconds")
+        lignes = []
+        for p in detail:
+            ticker = p.get("symbol")
+            titres = float(p.get("qty", 0.0) or 0.0)
+            # Une position courte se solde en ACHETANT. La strategie n'en prend
+            # pas, mais une liquidation d'urgence qui laisserait une ligne
+            # ouverte parce qu'elle est du mauvais signe ne serait pas une
+            # liquidation.
+            sens = ord_mod.VENTE if titres > 0 else ord_mod.ACHAT
+            quantite = round(abs(titres), 6)
+            if quantite <= 0:
+                rapport["ignores"].append({"ticker": ticker, "titres": titres,
+                                           "raison": "poussiere inferieure a 1e-6"})
+                continue
+            ligne = {"horodatage": horodatage, "compte": numero, "mode": "simulation",
+                     "ticker": ticker, "sens": sens, "quantite": quantite,
+                     "montant": round(abs(float(p.get("market_value", 0.0) or 0.0)), 2),
+                     "cours": "", "date_cours": "",
+                     "motif": "solde (%s)" % motif}
+            try:
+                rep = self.api.envoyer_ordre(ticker, sens, quantite=quantite)
+                ligne["statut"] = rep.get("status", "envoye")
+                ligne["id_courtier"] = rep.get("id", "")
+                rapport["soldes"] += 1
+            except Exception as exc:
+                ligne["statut"] = "ECHEC"
+                ligne["id_courtier"] = str(exc)[:180]
+                rapport["ok"] = False
+                rapport["echecs"].append({"ticker": ticker, "raison": str(exc)[:120]})
+            lignes.append(ligne)
+            time.sleep(0.1)
+
+        if lignes:
+            journaliser(lignes)
+        rapport["message"] = ("%d position(s) soldee(s), %d ordre(s) annule(s), "
+                              "%d echec(s)." % (rapport["soldes"], rapport["annules"],
+                                                len(rapport["echecs"])))
+        return rapport
+
+    def appliquer_defi(self, verdict=None, marche_ouvert=None) -> dict:
+        """Traduit un verrou de defi en actes. Le seul endroit qui le fasse.
+
+        `defi.evaluer` constate, cette methode agit. Separer les deux permet de
+        tester tout le raisonnement sans courtier, et de n'avoir qu'un seul
+        endroit ou du code vend.
+
+        Le marche ferme n'annule pas la consigne, il la reporte : `a_solder`
+        reste vrai sur disque et la liquidation partira au prochain passage en
+        seance. Un ordre au marche envoye hors seance serait refuse par le
+        courtier, ou - pire - execute a l'ouverture a un cours qu'on n'a pas
+        vu. Entre les deux, garder la consigne et attendre l'ouverture est le
+        seul comportement qui ne mente pas sur ce qui s'est passe.
+
+        Renvoie ce qui a ete fait, pour que l'appelant l'ecrive dans son
+        journal. Idempotent : une fois la liquidation faite, `a_solder` tombe
+        et les passages suivants ne font plus rien.
+        """
+        params = defi.parametres(self.cfg)
+        if params is None:
+            return {"actif": False, "verrou": None, "solde": None,
+                    "message": "mode defi inactif"}
+
+        if verdict is None:
+            dispo = self.disponible()
+            if not dispo["ok"]:
+                return {"actif": True, "verrou": None, "solde": None,
+                        "erreur": dispo["erreur"],
+                        "message": "courtier injoignable : %s" % dispo["erreur"][:120]}
+            compte = dispo["compte"]
+            verdict = defi.evaluer(
+                float(compte.get("equity", 0.0) or 0.0),
+                float(compte.get("last_equity", 0.0) or 0.0),
+                params, defi.lire_etat())
+
+        # L'etat du verdict est ecrit ICI, avant d'agir, et c'est cette methode
+        # qui s'en charge - jamais l'appelant.
+        #
+        # Le contraire etait un piege silencieux : `marquer_solde()` relit le
+        # DISQUE pour eteindre la consigne de liquidation. Un appelant qui
+        # ecrivait son verdict APRES coup - ce que faisait `veille_defi.py` -
+        # remettait donc `a_solder` a vrai par dessus, et la liquidation
+        # repartait a chaque passage, soit toutes les trente minutes pendant
+        # toute la seance. Poser l'invariant "le disque est a jour avant d'agir"
+        # ici plutot que dans chaque appelant est la seule version qui tient.
+        defi.ecrire_etat(verdict["etat"])
+
+        out = {"actif": True, "verrou": verdict.get("verrou"),
+               "nouveau_verrou": bool(verdict.get("nouveau_verrou")),
+               "solde": None, "resume": defi.resume(verdict, params),
+               "message": ""}
+
+        if not verdict.get("a_solder"):
+            out["message"] = (verdict["raison"] if verdict.get("verrou")
+                              else "limites respectees")
+            return out
+
+        if marche_ouvert is None:
+            try:
+                marche_ouvert = bool(self.api.horloge().get("is_open"))
+            except Exception:
+                marche_ouvert = False
+        if not marche_ouvert:
+            out["message"] = ("%s -- marche ferme : la liquidation partira a la "
+                              "prochaine seance." % verdict["raison"])
+            return out
+
+        out["solde"] = self.solder(motif=verdict["verrou"]["raison"])
+        if out["solde"]["ok"]:
+            defi.ecrire_etat(defi.marquer_solde(defi.lire_etat()))
+        out["message"] = "%s -- %s" % (verdict["raison"], out["solde"]["message"])
+        return out
 
     def executions(self, depuis=None) -> dict:
         if not JOURNAL.exists():

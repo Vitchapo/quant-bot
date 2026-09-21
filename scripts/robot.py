@@ -45,7 +45,7 @@ import _bootstrap  # noqa: F401
 
 import pandas as pd
 
-from quantbot import broker, datafeed, live, operations
+from quantbot import broker, datafeed, defi, live, operations
 from quantbot.backtest import BenchmarkMissingError
 from quantbot.config import Config
 from quantbot.universe import UniverseError
@@ -62,7 +62,8 @@ ATTENDRE, EXECUTER, DEJA_FAIT, TROP_TARD, AUCUN = (
     "attendre", "executer", "deja_fait", "trop_tard", "aucun")
 
 
-def decider(etat: dict, signal, seances_depuis: int, rattrapage: int = 3):
+def decider(etat: dict, signal, seances_depuis: int, rattrapage: int = 3,
+            compte_vide: bool = False):
     """Que faire de ce signal ? Fonction PURE : ni reseau, ni disque, ni horloge.
 
     Toute la discipline du robot tient dans ces quatre regles, et elles sont
@@ -86,6 +87,23 @@ def decider(etat: dict, signal, seances_depuis: int, rattrapage: int = 3):
     if seances_depuis < 1:
         return ATTENDRE, "signal tombe a la derniere seance : execution demain"
     if seances_depuis > rattrapage:
+        # Un compte VIDE est le seul cas ou "trop tard" est le mauvais verdict.
+        #
+        # La regle du rattrapage protege contre le rebalancement d'un
+        # portefeuille EXISTANT sur un classement perime : on brasserait des
+        # lignes reelles sur une decision qui n'a plus cours. Sans position,
+        # cette objection tombe - il n'y a rien a brasser, et la cible du
+        # dernier signal echu est exactement ce que le backtest detient
+        # aujourd'hui. Sauter revient a laisser le compte en liquidites une
+        # periode de plus, c'est-a-dire a ne jamais demarrer.
+        #
+        # C'est ce chemin, et non le tableau de bord, qui laissait le compte
+        # neuf a zero : `passer()` s'arrete ICI et n'atteint jamais l'amorcage
+        # de `operations.etat()`.
+        if compte_vide:
+            return EXECUTER, ("signal vieux de %d seances (au-dela du rattrapage "
+                              "de %d) mais le compte est VIDE : entree initiale"
+                              % (seances_depuis, rattrapage))
         return TROP_TARD, ("signal vieux de %d seances, au-dela du rattrapage de %d"
                            % (seances_depuis, rattrapage))
     return EXECUTER, "signal du %s, %d seance(s) apres" % (signal.date(), seances_depuis)
@@ -137,6 +155,28 @@ def passer(args) -> int:
 
     ops = operations.Operations(cfg, lambda: datafeed.load_panel(cfg))
 
+    # -- 0. un verrou de defi deja pose arrete tout, avant meme les cours ---
+    #
+    # Pose lors d'une passe precedente, ou par `veille_defi.py` en cours de
+    # seance. Inutile de telecharger 500 series et de recalculer un score pour
+    # apprendre qu'on n'enverra rien : le verrou est sur disque, la question se
+    # tranche en une lecture de fichier.
+    #
+    # On passe quand meme par `appliquer_defi` : si la liquidation n'a pas pu
+    # partir (marche ferme au moment de la breche), la consigne est toujours en
+    # attente et c'est maintenant qu'elle doit sortir.
+    if defi.parametres(cfg) is not None and defi.est_verrouille(defi.lire_etat()):
+        applique = ops.appliquer_defi()
+        rapport("  VERROU DEFI en place : %s" % applique["message"])
+        for echec in (applique.get("solde") or {}).get("echecs", []):
+            rapport("    ECHEC %-6s %s" % (echec["ticker"], echec["raison"][:80]))
+        rapport("  Pour repartir : python scripts\\veille_defi.py --lever-verrou")
+        _ecrire_etat(dict(etat,
+                          dernier_passage=datetime.now().isoformat(timespec="seconds"),
+                          dernier_resultat="verrou defi"), Path(args.etat))
+        rapport.clore("VERROU DEFI")
+        return BLOQUE
+
     # -- 1. cours a jour ---------------------------------------------------
     if not args.sans_fetch:
         rapport("  mise a jour des cours...")
@@ -176,7 +216,14 @@ def passer(args) -> int:
     rapport("  dernier signal revolu : %s (il y a %d seance(s))"
             % (signal.date(), seances_depuis))
 
-    decision, raison = decider(etat, signal, seances_depuis, args.rattrapage)
+    # Question posee au courtier AVANT de decider, pour que `decider` reste une
+    # fonction pure - la seule partie du robot qu'on puisse relire sans monter
+    # un faux serveur.
+    vide = ops.compte_vide() if cfg.get("execution.amorcage", True) else False
+    if vide:
+        rapport("  compte vide chez le courtier : amorcage possible")
+    decision, raison = decider(etat, signal, seances_depuis, args.rattrapage,
+                               compte_vide=vide)
     rapport("  decision : %s - %s" % (decision, raison))
 
     if decision in (AUCUN, DEJA_FAIT, ATTENDRE):
@@ -207,6 +254,32 @@ def passer(args) -> int:
     for controle in etat_compte["controles"]:
         rapport("    %s %-26s %s" % ("[ok] " if controle["ok"] else "[NON]",
                                      controle["nom"], controle["detail"][:60]))
+
+    # -- 4 bis. le verrou du defi passe avant tout le reste ----------------
+    #
+    # Place ICI, apres l'affichage des controles et avant leur verdict : si une
+    # limite de perte est franchie, la question n'est plus de savoir si l'envoi
+    # est propre, mais de sortir. Et c'est le robot - pas le module `defi`, qui
+    # ne fait que constater - qui declenche la liquidation.
+    verdict_defi = etat_compte.get("defi")
+    if verdict_defi is not None and verdict_defi.get("verrou"):
+        rapport("")
+        rapport("  !! " + verdict_defi["raison"])
+        applique = ops.appliquer_defi(verdict=verdict_defi,
+                                      marche_ouvert=etat_compte["marche_ouvert"])
+        rapport("  " + applique["message"])
+        for echec in (applique.get("solde") or {}).get("echecs", []):
+            rapport("    ECHEC %-6s %s" % (echec["ticker"], echec["raison"][:80]))
+        rapport("")
+        rapport("  Le verrou ne se leve pas tout seul et bloque aussi l'amorcage.")
+        rapport("  Pour repartir : python scripts\\veille_defi.py --lever-verrou")
+        _ecrire_etat(dict(etat,
+                          dernier_passage=datetime.now().isoformat(timespec="seconds"),
+                          dernier_resultat="verrou defi (%s)"
+                                           % verdict_defi["verrou"]["raison"]),
+                     Path(args.etat))
+        rapport.clore("VERROU DEFI - " + verdict_defi["verrou"]["raison"])
+        return BLOQUE
 
     # Le jour de rebalancement est evalue par le robot lui-meme, plus haut :
     # il travaille sur le signal revolu, pas sur la seance courante.
