@@ -17,6 +17,7 @@ Deux regles a connaitre :
 from __future__ import annotations
 
 from dataclasses import dataclass, asdict
+from decimal import ROUND_DOWN, Decimal
 from typing import Optional
 
 VENTE = "sell"
@@ -54,6 +55,16 @@ def seuil_minimal(cfg, equity: float) -> float:
     """
     return max(float(cfg.get("broker.min_order_pct", 0.0025) or 0.0) * float(equity),
                float(cfg.get("broker.min_order_notional", 0.0) or 0.0))
+
+
+def _tronquer(quantite: float, decimales: int = 6) -> float:
+    """Arrondi vers zero, sans l'erreur de representation d'un float.
+
+    `repr` donne l'ecriture decimale la plus courte qui redonne le meme float :
+    20.123906515 reste 20.123906515, et non 20.12390651499999...
+    """
+    pas = Decimal(1).scaleb(-decimales)
+    return float(Decimal(repr(float(quantite))).quantize(pas, rounding=ROUND_DOWN))
 
 
 def _motif(actuel: float, cible: float) -> str:
@@ -123,7 +134,15 @@ def planifier(cibles: dict, positions: dict, cours: dict, equity: float,
         # On ARRONDIT AVANT de valider, jamais l'inverse : `round(1e-7, 6)`
         # vaut exactement 0.0, et un ordre a quantite nulle est refuse par le
         # courtier a chaque passage, indefiniment.
-        quantite = None if quantite is None else round(quantite, 6)
+        #
+        # Et une VENTE s'arrondit vers le BAS. Le courtier compte les fractions
+        # a 9 decimales : pour 20.123906515 titres detenus, round(., 6) demande
+        # 20.123907, soit PLUS que detenu - HTTP 403 « insufficient qty
+        # available ». Arrive le 23 septembre 2026 sur la sortie de HUM ; l'echec
+        # se serait repete a chaque rebalancement. Tronquer laisse au pire une
+        # poussiere de moins d'un millionieme de titre, que `poussieres` signale.
+        if quantite is not None:
+            quantite = _tronquer(quantite) if delta < 0 else round(quantite, 6)
         if (quantite is not None and quantite <= 0) or montant < SEUIL_POUSSIERE:
             continue
         ordres.append(Ordre(

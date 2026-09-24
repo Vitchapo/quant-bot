@@ -118,6 +118,32 @@ class TestPoussieres:
         o = planifier({}, {"AAA": 2.0}, COURS, 100_000)
         assert len(o) == 1 and o[0].quantite == pytest.approx(2.0)
 
+    def test_une_sortie_fractionnaire_ne_demande_jamais_plus_que_detenu(self):
+        """23 septembre 2026, sortie de HUM : 20.123906515 titres detenus,
+        round(., 6) demandait 20.123907 - refuse par le courtier (HTTP 403,
+        « insufficient qty available »). Une vente se TRONQUE."""
+        from quantbot.orders import planifier
+        o = planifier({}, {"HUM": 20.123906515}, {"HUM": 372.0}, 100_000)
+        assert len(o) == 1 and o[0].motif == "sortie"
+        assert o[0].quantite == 20.123906
+
+    def test_aucune_vente_ne_depasse_le_detenu_a_9_decimales(self):
+        from quantbot.orders import planifier
+        for detenu in (20.123906515, 3.0000005, 0.999999999, 7.1234565, 1.5, 2.0):
+            ordres = planifier({}, {"AAA": detenu}, COURS, 100_000)
+            assert len(ordres) == 1, detenu
+            assert ordres[0].quantite <= detenu, detenu
+            assert detenu - ordres[0].quantite < 1e-6, detenu
+
+    def test_les_achats_gardent_l_arrondi_au_plus_proche(self):
+        """Seules les ventes sont tronquees : un achat en titres entiers ne
+        change pas, un achat fractionnaire part en montant."""
+        from quantbot.orders import planifier
+        o = planifier({"AAA": 0.55}, {}, COURS, 1_000, fractionnaire=False)
+        assert o[0].quantite == 5.0
+        o = planifier({"AAA": 0.55}, {}, COURS, 1_000)
+        assert o[0].quantite is None and o[0].montant == pytest.approx(550.0)
+
     def test_les_residus_sont_listes_a_part(self):
         from quantbot.orders import poussieres
         p = poussieres({}, {"AAA": 1e-7, "BBB": 4.0}, COURS)

@@ -115,3 +115,4 @@ python scripts/releve_quotidien.py --historique
 | date | quoi | suite donnée |
 |---|---|---|
 | 21/09 | rebalancement du lundi manqué : aucun passage du robot ce jour-là dans `robot_sortie.log` | à élucider avant le 2 novembre |
+| 23/09 | sortie de HUM refusée (HTTP 403) : quantité arrondie AU-DESSUS du détenu (20,123907 pour 20,123906515) ; les achats sont partis sans le produit de cette vente (~7 490 $) | corrigé le 24/09 (`orders.py` tronque les ventes) ; HUM reste en portefeuille jusqu'au prochain rebalancement ; vérifier les liquidités |
