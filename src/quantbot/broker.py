@@ -212,6 +212,18 @@ class Alpaca:
     def ordre(self, identifiant: str) -> dict:
         return self._appel("GET", "/v2/orders/%s" % identifiant)
 
+    def historique(self, periode: str = "3M", echelle: str = "1D") -> dict:
+        """Valeur du compte seance par seance, telle que le courtier l'a tenue.
+
+        C'est la source des courbes du tableau de bord. Le robot ne passe
+        qu'une fois par jour et le tableau de bord seulement quand on l'ouvre :
+        un historique reconstruit a partir de leurs passages aurait des trous
+        exactement les jours ou il ne s'est rien passe de notre cote - et ou
+        le marche, lui, a bouge. Le courtier cote le compte chaque seance.
+        """
+        return self._appel("GET", "/v2/account/portfolio/history",
+                           params={"period": periode, "timeframe": echelle})
+
     def ordres_ouverts(self) -> list:
         return self._appel("GET", "/v2/orders", params={"status": "open"}) or []
 

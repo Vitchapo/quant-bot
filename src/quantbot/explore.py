@@ -187,6 +187,50 @@ def _drawdown(result):
     return _thin(metrics.drawdown_series(eq) * 100.0)
 
 
+def _mensuels(series: pd.Series):
+    """Rendement de chaque mois civil, calcule sur l'equite JOURNALIERE.
+
+    Ici, cote serveur, et non dans le navigateur a partir de la courbe
+    dessinee : celle-ci est amincie a un point par semaine, donc ses fins de
+    mois tombent jusqu'a quatre seances a cote des vraies. Sur une carte ou
+    chaque case se lit seule, cet ecart est du meme ordre que le rendement
+    d'un mois calme - la case mentirait.
+
+    Le premier mois, souvent partiel, est mesure depuis la premiere valeur
+    connue. Regroupement par (annee, mois) plutot que `resample` : l'alias de
+    frequence a change entre pandas 1.x et 2.2 ('M' -> 'ME'), et le projet
+    tourne sur les deux (Python 3.8 plafonne pandas a 2.0).
+    """
+    s = series.dropna()
+    if len(s) < 2:
+        return [], []
+    fins = s.groupby([s.index.year, s.index.month]).last()
+    precedent = fins.shift(1)
+    precedent.iloc[0] = s.iloc[0]
+    r = (fins / precedent - 1.0).to_numpy(dtype="float64")
+    mois = ["%04d-%02d" % (a, m) for a, m in fins.index]
+    return mois, [round(float(x), 6) if np.isfinite(x) else None for x in r]
+
+
+def _mensuels_alignes(strat, univ):
+    """Les trois series mensuelles sur le MEME calendrier de mois.
+
+    Strategie et univers partagent le calendrier du backtest ; l'indice peut
+    commencer plus tard ou s'arreter plus tot. On l'aligne mois par mois, avec
+    None la ou il n'existe pas - jamais de report d'un mois sur l'autre.
+    """
+    mois, s = _mensuels(strat.equity)
+    mois_u, u = _mensuels(univ.equity)
+    par_u = dict(zip(mois_u, u))
+    out = {"mois": mois, "strategie": s, "univers": [par_u.get(m) for m in mois],
+           "indice": [None] * len(mois)}
+    if strat.benchmark is not None:
+        mois_i, i = _mensuels(strat.benchmark)
+        par_i = dict(zip(mois_i, i))
+        out["indice"] = [par_i.get(m) for m in mois]
+    return out
+
+
 def _records(df):
     """DataFrame -> liste de dictionnaires JSON-compatibles.
 
@@ -262,6 +306,7 @@ class Explorer:
             "series": {"strategie": strat_curve, "univers": univ_curve, "indice": bench_curve},
             "dd_dates": dd_dates,
             "drawdowns": {"strategie": dd_strat, "univers": dd_univ},
+            "mensuels": _mensuels_alignes(strat, univ),
             "n_assets": self.n_assets,
             "duree_ms": int(1000 * (time.time() - t0)),
             "values": v,
@@ -296,7 +341,8 @@ class Explorer:
                               .reindex(pd.to_datetime(dates)).ffill().round(2)
                               .where(lambda x: x.notna(), None))
         out = {"dates": dates, "curve": curve, "univers": univ_curve, "indice": indice,
-               "periods": {}, "univers_periods": {}}
+               "periods": {}, "univers_periods": {},
+               "mensuels": _mensuels_alignes(strat, univ)}
         for s in starts:
             key = s or "full"
             out["periods"][key] = clean(metrics.compute(edge._slice(strat, s or None), rf))

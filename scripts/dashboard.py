@@ -179,6 +179,26 @@ def serve(cfg, prices, port, open_browser=True):
             pouls_cache.update(t=maintenant, valeur=valeur)
         return valeur
 
+    # L'historique du compte est une donnee JOURNALIERE : le redemander au
+    # courtier a chaque battement serait du bruit reseau pour rien. Une minute
+    # de cache ; le client le relit de toute facon apres chaque transaction.
+    historique_cache = {"t": 0.0, "valeur": None}
+    historique_verrou = threading.Lock()
+
+    def historique():
+        maintenant = time.time()
+        with historique_verrou:
+            if (historique_cache["valeur"] is not None
+                    and maintenant - historique_cache["t"] < 60.0):
+                return historique_cache["valeur"]
+        try:
+            valeur = ops.historique()
+        except Exception as exc:
+            valeur = {"ok": False, "raison": str(exc)[:200]}
+        with historique_verrou:
+            historique_cache.update(t=maintenant, valeur=valeur)
+        return valeur
+
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
 
@@ -225,6 +245,14 @@ def serve(cfg, prices, port, open_browser=True):
             # renseigner l'interface pendant qu'un backtest occupe le moteur.
             if self.path == "/api/ops/pouls":
                 self._send(200, json.dumps(pouls(), ensure_ascii=False).encode("utf-8"),
+                           "application/json; charset=utf-8")
+                return
+            if self.path == "/api/ops/historique":
+                # Hors verrou, comme le battement : les courbes du compte ne
+                # doivent pas geler pendant qu'un test du hasard occupe le
+                # moteur pour une minute et demie.
+                self._send(200, json.dumps(historique(), ensure_ascii=False,
+                                           allow_nan=False).encode("utf-8"),
                            "application/json; charset=utf-8")
                 return
             if self.path == "/api/ops/statut":
@@ -350,8 +378,11 @@ def export(cfg, prices, path, draws=120, with_null=True, null_budget=300.0):
                     reference["univers"] = res["univers"]
                     reference["indice"] = res["indice"]
                     reference["periods"] = res["univers_periods"]
+                    reference["mensuels"] = {k: res["mensuels"][k]
+                                             for k in ("mois", "univers", "indice")}
                 grid_variants["%d|%s|%d" % (n, w, 1 if r else 0)] = {
-                    "curve": res["curve"], "periods": res["periods"]}
+                    "curve": res["curve"], "periods": res["periods"],
+                    "mensuels": res["mensuels"]["strategie"]}
                 done += 1
                 sys.stdout.write("\r  %d/%d variantes" % (done, total)); sys.stdout.flush()
     print()

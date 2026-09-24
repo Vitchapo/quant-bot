@@ -270,6 +270,24 @@ button.danger:hover { filter: brightness(1.08); }
 .confirmation b { font-variant-numeric: tabular-nums; }
 .progression { font-size: 12.5px; color: var(--ink-2); margin-top: 10px; white-space: pre-line; }
 .pastille-mode { background: var(--good); color: #fff; border-color: transparent; }
+
+/* -- graphiques du compte et carte mensuelle --------------------------- */
+/* Statuts : fixes dans les deux themes (jamais reutilises pour une serie). */
+:root { --warning: #fab219; --serious: #ec835a; --neutral-mid: #f0efec; }
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) { --neutral-mid: #383835; }
+}
+:root[data-theme="dark"] { --neutral-mid: #383835; }
+.legend i.point { width: 9px; height: 9px; border-radius: 50%; background: var(--series-1); }
+.legend i.creux { width: 11px; height: 11px; border-radius: 50%; background: transparent;
+  border: 2px solid var(--series-1); }
+.card h4 { margin: 22px 0 2px; font-size: 13.5px; font-weight: 600; }
+.bascule { display: inline-flex; border: 1px solid var(--border); border-radius: 7px;
+  overflow: hidden; margin: 6px 0 10px; }
+.bascule button { border: 0; border-radius: 0; padding: 4px 11px; font-size: 12.5px;
+  background: transparent; color: var(--ink-2); }
+.bascule button[aria-pressed="true"] { background: var(--series-1); color: #fff; }
+.note-graphe { font-size: 12.5px; color: var(--ink-2); margin: 8px 0 0; max-width: 80ch; }
 """
 
 
@@ -344,7 +362,10 @@ function drawLines(cv, tip, opt) {
   for (const s of series) for (const v of s.values) if (clean(v)) { if (v < lo) lo = v; if (v > hi) hi = v; }
   if (!isFinite(lo)) return;
   if (opt.log) { lo = Math.max(lo * 0.94, 1e-6); hi = hi * 1.06; }
-  else { const pad = (hi - lo) * 0.08 || 1; lo -= pad; hi += pad; if (opt.zeroTop && hi > 0) hi = 0; }
+  else {
+    if (opt.fillZero) { lo = Math.min(lo, 0); hi = Math.max(hi, 0); }   // le zero reste dans le cadre
+    const pad = (hi - lo) * 0.08 || 1; lo -= pad; hi += pad; if (opt.zeroTop && hi > 0) hi = 0;
+  }
 
   const ty = opt.log ? function (v) { return y1 - (Math.log10(v) - Math.log10(lo)) / (Math.log10(hi) - Math.log10(lo)) * (y1 - y0); }
                      : function (v) { return y1 - (v - lo) / (hi - lo) * (y1 - y0); };
@@ -373,6 +394,26 @@ function drawLines(cv, tip, opt) {
   }
   ctx.strokeStyle = cssVar("--axis");
   ctx.beginPath(); ctx.moveTo(x0, y1 + 0.5); ctx.lineTo(x1, y1 + 0.5); ctx.stroke();
+
+  // Lavis au-dessus / au-dessous de zero : une serie dont le SIGNE est le
+  // message. 12 % d'opacite, jamais un aplat.
+  if (opt.fillZero && !opt.log) {
+    const z = ty(0);
+    for (const s of series) {
+      const P = [];
+      for (let i = 0; i < s.values.length; i++) if (clean(s.values[i])) P.push([tx(i), ty(s.values[i])]);
+      if (P.length < 2) continue;
+      for (const zo of [[y0, z, cssVar("--pos")], [z, y1, cssVar("--neg")]]) {
+        ctx.save(); ctx.beginPath(); ctx.rect(x0, zo[0], x1 - x0, zo[1] - zo[0]); ctx.clip();
+        ctx.beginPath(); ctx.moveTo(P[0][0], z);
+        for (const p of P) ctx.lineTo(p[0], p[1]);
+        ctx.lineTo(P[P.length - 1][0], z); ctx.closePath();
+        ctx.globalAlpha = 0.12; ctx.fillStyle = zo[2]; ctx.fill(); ctx.restore();
+      }
+    }
+    ctx.strokeStyle = cssVar("--axis"); ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(x0, Math.round(z) + 0.5); ctx.lineTo(x1, Math.round(z) + 0.5); ctx.stroke();
+  }
 
   // traces : 2px, sans remplissage lourd
   ctx.lineWidth = 2; ctx.lineJoin = "round"; ctx.lineCap = "round";
@@ -419,7 +460,10 @@ function drawLines(cv, tip, opt) {
       return '<div class="row"><span><i style="background:' + s.color + '"></i> ' + s.name +
              '</span><b>' + (clean(s.values[i]) ? (opt.tipFmt ? opt.tipFmt(s.values[i]) : fmtNum(s.values[i])) : "n/a") + '</b></div>';
     }).join("");
-    tip.innerHTML = '<div style="color:var(--muted);margin-bottom:4px">' + opt.dates[i] + '</div>' + rows;
+    const extra = opt.tipExtra ? opt.tipExtra(i).map(function (r) {
+      return '<div class="row"><span>' + r[0] + '</span><b>' + r[1] + '</b></div>'; }).join("") : "";
+    tip.innerHTML = '<div style="color:var(--muted);margin-bottom:4px">' +
+      (opt.dateFmt ? opt.dateFmt(opt.dates[i]) : opt.dates[i]) + '</div>' + rows + extra;
     tip.style.opacity = 1;
     const tw = tip.offsetWidth;
     tip.style.left = Math.min(Math.max(tx(i) + 14, 4), S.w - tw - 4) + "px";
@@ -623,6 +667,636 @@ function drawDeciles(cv, d) {
 }
 
 // ---------------------------------------------------------------------------
+// Outils des graphiques du compte et de la carte mensuelle
+// ---------------------------------------------------------------------------
+const MOIS_COURTS = ["janv.", "fevr.", "mars", "avr.", "mai", "juin",
+                     "juil.", "aout", "sept.", "oct.", "nov.", "dec."];
+const MOIS_LONGS = ["janvier", "fevrier", "mars", "avril", "mai", "juin",
+                    "juillet", "aout", "septembre", "octobre", "novembre", "decembre"];
+const POLICE = "11px system-ui, -apple-system, 'Segoe UI', sans-serif";
+const POLICE_FORTE = "600 11px system-ui, -apple-system, 'Segoe UI', sans-serif";
+function propre(v) { return v !== null && v !== undefined && isFinite(v); }
+function jourCourt(d) { return d.slice(8, 10) + "/" + d.slice(5, 7); }
+function jourLong(d) {
+  return parseInt(d.slice(8, 10), 10) + " " + MOIS_LONGS[parseInt(d.slice(5, 7), 10) - 1] +
+         " " + d.slice(0, 4);
+}
+function moisLong(m) { return MOIS_LONGS[parseInt(m.slice(5, 7), 10) - 1] + " " + m.slice(0, 4); }
+function pts(x) { return propre(x) ? fmtNum(100 * x, 2) + NB + "pts" : "n/a"; }
+function symbole(dev) { return !dev || dev === "USD" ? "$" : dev; }
+function montant(x, dev) {
+  if (!propre(x)) return "n/a";
+  return x.toLocaleString("fr-FR", { maximumFractionDigits: 0 }) + NB + symbole(dev);
+}
+function argent(x, dev) {
+  if (!propre(x)) return "n/a";
+  return (x > 0 ? "+" : x < 0 ? "-" : "") + montant(Math.abs(x), dev);
+}
+// Graduation d'un axe en % : "0 %" au zero plutot que "+0 %", une decimale
+// seulement quand le pas l'exige.
+function pctAxe(t, pas) {
+  if (Math.abs(t) < 1e-12) return "0" + NB + "%";
+  return fmtSigned(t, pas < 0.00999 ? 1 : 0);
+}
+
+// Infobulle construite noeud par noeud : les noms affiches viennent parfois
+// du courtier (tickers) et ne passent donc jamais par innerHTML.
+function tipRemplir(tip, titre, lignes) {
+  while (tip.firstChild) tip.removeChild(tip.firstChild);
+  const t = document.createElement("div");
+  t.style.color = "var(--muted)"; t.style.marginBottom = "4px";
+  t.textContent = titre;
+  tip.appendChild(t);
+  for (const l of lignes) {
+    const row = document.createElement("div"); row.className = "row";
+    const nom = document.createElement("span");
+    if (l.couleur) {
+      const i = document.createElement("i"); i.style.background = l.couleur;
+      nom.appendChild(i); nom.appendChild(document.createTextNode(" "));
+    }
+    nom.appendChild(document.createTextNode(l.nom));
+    const val = document.createElement("b"); val.textContent = l.valeur;
+    row.appendChild(nom); row.appendChild(val); tip.appendChild(row);
+  }
+}
+function tipPoser(tip, S, x, y) {
+  tip.style.opacity = 1;
+  const tw = tip.offsetWidth, th = tip.offsetHeight;
+  tip.style.left = Math.min(Math.max(x + 14, 4), S.w - tw - 4) + "px";
+  tip.style.top = Math.max(4, Math.min(y - 12, S.h - th - 4)) + "px";
+}
+function tipCacher(tip) { if (tip) tip.style.opacity = 0; }
+// Legende en DOM : meme regle que l'infobulle, jamais de nom dans innerHTML.
+function legendeDom(hote, items) {
+  const cle = JSON.stringify(items);
+  if (!hote || hote.dataset.cle === cle) return;
+  hote.dataset.cle = cle;
+  while (hote.firstChild) hote.removeChild(hote.firstChild);
+  for (const it of items) {
+    const s = document.createElement("span"), i = document.createElement("i");
+    i.style.background = it[1];
+    s.appendChild(i); s.appendChild(document.createTextNode(it[0])); hote.appendChild(s);
+  }
+}
+
+// Geometrie commune aux deux graphiques du defi : chaque seance occupe une
+// tranche de meme largeur, au meme endroit dans les deux. La barre du jour
+// tombe donc exactement a l'aplomb de son point sur la courbe du dessus.
+function geoSeances(S, n, padL, padR, padT, padB) {
+  const x0 = padL, x1 = S.w - padR, y0 = padT, y1 = S.h - padB;
+  const pas = (x1 - x0) / Math.max(n, 1);
+  return { x0: x0, x1: x1, y0: y0, y1: y1, pas: pas,
+           tx: function (i) { return x0 + pas * (i + 0.5); } };
+}
+function axeY(ctx, lo, hi, ty, x0, x1, y0, y1, fmt) {
+  const ticks = niceTicks(lo, hi, 6), pas = ticks.length > 1 ? ticks[1] - ticks[0] : 1;
+  ctx.strokeStyle = cssVar("--grid"); ctx.lineWidth = 1;
+  ctx.fillStyle = cssVar("--muted"); ctx.textAlign = "right"; ctx.textBaseline = "middle";
+  for (const t of ticks) {
+    const y = Math.round(ty(t)) + 0.5;
+    if (y < y0 - 1 || y > y1 + 1) continue;
+    ctx.beginPath(); ctx.moveTo(x0, y); ctx.lineTo(x1, y); ctx.stroke();
+    ctx.fillText(fmt(t, pas), x0 - 8, y);
+  }
+}
+// Axe de SEANCES. Celui des backtests est gradue par annee : sur trois
+// semaines d'historique il n'afficherait qu'un libelle. Ici une etiquette
+// par seance ou par mois selon la duree, et une etiquette qui chevaucherait
+// la precedente est sautee plutot que tassee.
+function axeSeances(ctx, dates, tx, y0, y1, x1) {
+  const n = dates.length, cand = [], parMois = n > 45;
+  if (!parMois) { for (let i = 0; i < n; i++) cand.push({ i: i, t: jourCourt(dates[i]) }); }
+  else {
+    let m = null;
+    for (let i = 0; i < n; i++) {
+      const k = dates[i].slice(0, 7);
+      if (k !== m) { m = k; cand.push({ i: i, t: MOIS_COURTS[parseInt(k.slice(5, 7), 10) - 1] }); }
+    }
+  }
+  ctx.textAlign = "center"; ctx.textBaseline = "top";
+  let fin = -Infinity;
+  for (const c of cand) {
+    const X = tx(c.i), w = ctx.measureText(c.t).width;
+    if (X - w / 2 < fin + 10 || X + w / 2 > x1 + 30) continue;
+    if (parMois) {
+      const p = Math.round(X) + 0.5;
+      ctx.strokeStyle = cssVar("--grid"); ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(p, y0); ctx.lineTo(p, y1); ctx.stroke();
+    }
+    ctx.fillStyle = cssVar("--muted"); ctx.fillText(c.t, X, y1 + 7);
+    fin = X + w / 2;
+  }
+}
+// Un SEUIL est tirete : c'est ce qui le distingue d'une graduation, laquelle
+// reste un filet plein et discret.
+function seuil(ctx, xs, ys, couleur) {
+  ctx.save(); ctx.strokeStyle = couleur; ctx.lineWidth = 1.5; ctx.setLineDash([5, 4]);
+  ctx.beginPath();
+  for (let k = 0; k < xs.length; k++) { if (k === 0) ctx.moveTo(xs[k], ys[k]); else ctx.lineTo(xs[k], ys[k]); }
+  ctx.stroke(); ctx.restore();
+}
+// Etiquettes de marge droite : une cle (trait plein pour une serie, ICONE
+// pour un seuil), puis le texte a l'encre. Le texte ne porte jamais la
+// couleur de la donnee : un jaune ou un turquoise seraient illisibles.
+//
+// Pourquoi une icone sur les seuils : le vert de l'objectif et le rouge du
+// contrat sont indiscernables en deuteranopie (ecart 4,1 au validateur, sous
+// le plancher de 6). Une couleur de statut ne porte jamais seule le sens :
+// icone + libelle + position, trois canaux qui ne dependent pas de la vue.
+const ICONES = { objectif: "✓", "garde-fou": "!", contrat: "✕" };
+function etiquettesDroite(ctx, items, x1, y0, y1) {
+  placeLabels(items, 14, y0 + 6, y1 - 2);
+  ctx.textAlign = "left"; ctx.textBaseline = "middle";
+  for (const it of items) {
+    const icone = it.seuil ? ICONES[it.texte.split(" ")[0]] : null;
+    if (icone) {
+      ctx.font = POLICE_FORTE; ctx.fillStyle = it.couleur; ctx.textAlign = "center";
+      ctx.fillText(icone, x1 + 11, it.y); ctx.textAlign = "left";
+    } else {
+      ctx.save(); ctx.strokeStyle = it.couleur; ctx.lineWidth = it.seuil ? 1.5 : 3;
+      if (it.seuil) ctx.setLineDash([3, 2]);
+      ctx.beginPath(); ctx.moveTo(x1 + 6, it.y); ctx.lineTo(x1 + 16, it.y); ctx.stroke(); ctx.restore();
+    }
+    ctx.font = it.fort ? POLICE_FORTE : POLICE;
+    ctx.fillStyle = cssVar(it.fort ? "--ink" : "--ink-2");
+    ctx.fillText(it.texte, x1 + 21, it.y);
+  }
+  ctx.font = POLICE;
+}
+// Barre a bout ARRONDI cote donnee, CARRE cote ligne de base.
+function barreV(ctx, x, w, yBase, yVal) {
+  const haut = Math.min(yBase, yVal), bas = Math.max(yBase, yVal), h = bas - haut;
+  if (h < 0.5) return;
+  const r = Math.min(4, h, w / 2);
+  ctx.beginPath();
+  if (yVal <= yBase) {
+    ctx.moveTo(x, bas); ctx.lineTo(x, haut + r); ctx.arcTo(x, haut, x + r, haut, r);
+    ctx.lineTo(x + w - r, haut); ctx.arcTo(x + w, haut, x + w, haut + r, r); ctx.lineTo(x + w, bas);
+  } else {
+    ctx.moveTo(x, haut); ctx.lineTo(x, bas - r); ctx.arcTo(x, bas, x + r, bas, r);
+    ctx.lineTo(x + w - r, bas); ctx.arcTo(x + w, bas, x + w, bas - r, r); ctx.lineTo(x + w, haut);
+  }
+  ctx.closePath(); ctx.fill();
+}
+function barreH(ctx, y, h, xBase, xVal) {
+  const g = Math.min(xBase, xVal), d = Math.max(xBase, xVal), w = d - g;
+  if (w < 0.5) return;
+  const r = Math.min(4, w, h / 2);
+  ctx.beginPath();
+  if (xVal >= xBase) {
+    ctx.moveTo(g, y); ctx.lineTo(d - r, y); ctx.arcTo(d, y, d, y + r, r);
+    ctx.lineTo(d, y + h - r); ctx.arcTo(d, y + h, d - r, y + h, r); ctx.lineTo(g, y + h);
+  } else {
+    ctx.moveTo(d, y); ctx.lineTo(g + r, y); ctx.arcTo(g, y, g, y + r, r);
+    ctx.lineTo(g, y + h - r); ctx.arcTo(g, y + h, g + r, y + h, r); ctx.lineTo(d, y + h);
+  }
+  ctx.closePath(); ctx.fill();
+}
+// Point plein avec anneau de 2 px couleur de surface : il reste lisible la
+// ou il croise une courbe.
+function point(ctx, x, y, couleur) {
+  ctx.beginPath(); ctx.arc(x, y, 4.5, 0, 6.2832);
+  ctx.fillStyle = couleur; ctx.fill();
+  ctx.lineWidth = 2; ctx.strokeStyle = cssVar("--surface"); ctx.stroke();
+}
+function bandeSurvol(ctx, x, y, w, h) {
+  ctx.save(); ctx.globalAlpha = 0.55; ctx.fillStyle = cssVar("--grid");
+  ctx.fillRect(x, y, w, h); ctx.restore();
+}
+
+// Interpolation PERCEPTUELLE (OKLab) pour l'echelle divergente. Un melange en
+// RVB entre le gris neutre et le bleu traverse des teintes ternes : les mois
+// moyens paraitraient plus faibles qu'ils ne sont.
+function hexRgb(h) {
+  h = (h || "#000000").trim().replace("#", "");
+  if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+  return [parseInt(h.slice(0, 2), 16) / 255, parseInt(h.slice(2, 4), 16) / 255,
+          parseInt(h.slice(4, 6), 16) / 255];
+}
+function versLin(c) { return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); }
+function versSrgb(c) { return c <= 0.0031308 ? 12.92 * c : 1.055 * Math.pow(c, 1 / 2.4) - 0.055; }
+function oklab(hex) {
+  const c = hexRgb(hex).map(versLin);
+  const l = Math.cbrt(0.4122214708 * c[0] + 0.5363325363 * c[1] + 0.0514459929 * c[2]);
+  const m = Math.cbrt(0.2119034982 * c[0] + 0.6806995451 * c[1] + 0.1073969566 * c[2]);
+  const s = Math.cbrt(0.0883024619 * c[0] + 0.2817188376 * c[1] + 0.6299787005 * c[2]);
+  return [0.2104542553 * l + 0.7936177850 * m - 0.0040720468 * s,
+          1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * s,
+          0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s];
+}
+function depuisOklab(L) {
+  const l = Math.pow(L[0] + 0.3963377774 * L[1] + 0.2158037573 * L[2], 3);
+  const m = Math.pow(L[0] - 0.1055613458 * L[1] - 0.0638541728 * L[2], 3);
+  const s = Math.pow(L[0] - 0.0894841775 * L[1] - 1.2914855480 * L[2], 3);
+  return [4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s,
+          -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s,
+          -0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s]
+    .map(function (c) { return Math.round(255 * Math.min(1, Math.max(0, versSrgb(c)))); });
+}
+// Rouge <- gris neutre -> bleu : deux teintes opposees, rien d'autre au milieu.
+function echelleDivergente() {
+  const neg = oklab(cssVar("--neg")), mid = oklab(cssVar("--neutral-mid")), pos = oklab(cssVar("--pos"));
+  return function (t) {
+    t = Math.max(-1, Math.min(1, t));
+    const b = t >= 0 ? pos : neg, k = Math.abs(t);
+    return depuisOklab([mid[0] + (b[0] - mid[0]) * k, mid[1] + (b[1] - mid[1]) * k,
+                        mid[2] + (b[2] - mid[2]) * k]);
+  };
+}
+function rgbCss(c) { return "rgb(" + c[0] + "," + c[1] + "," + c[2] + ")"; }
+// Encre ou blanc, selon ce qui contraste le plus avec la case.
+function encreSur(c) {
+  const L = 0.2126 * versLin(c[0] / 255) + 0.7152 * versLin(c[1] / 255) + 0.0722 * versLin(c[2] / 255);
+  return 1.05 / (L + 0.05) >= (L + 0.05) / 0.0533 ? "#ffffff" : "#0b0b0b";
+}
+
+// ---------------------------------------------------------------------------
+// Le defi : ou est le compte entre l'objectif et les deux planchers
+// ---------------------------------------------------------------------------
+// Une seule echelle, en % du capital de depart, pour le compte, l'indice et
+// les barrieres. Le domaine contient TOUJOURS l'objectif et la limite du
+// contrat : cadre sur la seule courbe, un recul de 0,5 % paraitrait
+// dramatique, et la distance qu'il faut lire - celle qui reste jusqu'aux
+// lignes - sortirait du cadre.
+function drawDefi(cv, tip, D, croix) {
+  const S = surface(cv, 300), ctx = S.ctx, n = D.dates.length;
+  if (!n) return;
+  const G = geoSeances(S, n, 52, 128, 12, 26);
+  const x0 = G.x0, x1 = G.x1, y0 = G.y0, y1 = G.y1, tx = G.tx;
+
+  let lo = 0, hi = 0;
+  const bornes = [D.compte, D.indice];
+  if (D.actif) bornes.push(D.plancherContrat, [D.objectif]);
+  for (const s of bornes) for (const v of s || []) if (propre(v)) { lo = Math.min(lo, v); hi = Math.max(hi, v); }
+  const marge = (hi - lo) * 0.08 || 0.01; lo -= marge; hi += marge;
+  const ty = function (v) { return y1 - (v - lo) / (hi - lo) * (y1 - y0); };
+
+  axeY(ctx, lo, hi, ty, x0, x1, y0, y1, pctAxe);
+  axeSeances(ctx, D.dates, tx, y0, y1, x1);
+  const z = Math.round(ty(0)) + 0.5;                 // le depart : l'axe de reference
+  ctx.strokeStyle = cssVar("--axis"); ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(x0, z); ctx.lineTo(x1, z); ctx.stroke();
+
+  const labels = [];
+  if (D.actif) {
+    // Plancher STATIQUE = une droite ; GLISSANT = un escalier sous le plus haut.
+    const trace = function (vals, couleur, texte) {
+      const plat = vals.every(function (v) { return Math.abs(v - vals[0]) < 1e-12; });
+      const xs = [x0], ys = [ty(vals[0])];
+      if (!plat) for (let i = 0; i < n; i++) { xs.push(tx(i)); ys.push(ty(vals[i])); }
+      xs.push(x1); ys.push(ty(vals[n - 1]));
+      seuil(ctx, xs, ys, couleur);
+      labels.push({ y: ys[ys.length - 1], texte: texte, couleur: couleur, seuil: true });
+    };
+    trace(D.objectifs, cssVar("--good"), "objectif " + fmtSigned(D.objectif, 0));
+    trace(D.plancherBot, cssVar("--serious"), "garde-fou " + fmtSigned(D.plancherBot[n - 1], 0));
+    trace(D.plancherContrat, cssVar("--critical"), "contrat " + fmtSigned(D.plancherContrat[n - 1], 0));
+  }
+  if (D.verrou && D.verrou.depuis) {
+    let iv = -1;
+    for (let i = 0; i < n; i++) if (D.dates[i] >= D.verrou.depuis) { iv = i; break; }
+    if (iv >= 0) {
+      const X = Math.round(tx(iv)) + 0.5, droite = X > (x0 + x1) / 2;
+      ctx.strokeStyle = cssVar("--critical"); ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.moveTo(X, y0); ctx.lineTo(X, y1); ctx.stroke();
+      ctx.font = POLICE_FORTE; ctx.fillStyle = cssVar("--ink");
+      ctx.textAlign = droite ? "right" : "left"; ctx.textBaseline = "top";
+      ctx.fillText("verrou pose", X + (droite ? -6 : 6), y0 + 2);
+      ctx.font = POLICE;
+    }
+  }
+
+  const courbe = function (vals, couleur) {
+    ctx.strokeStyle = couleur; ctx.lineWidth = 2; ctx.lineJoin = "round"; ctx.lineCap = "round";
+    ctx.beginPath(); let ok = false;
+    for (let i = 0; i < n; i++) {
+      const v = vals[i];
+      if (!propre(v)) { ok = false; continue; }
+      if (!ok) { ctx.moveTo(tx(i), ty(v)); ok = true; } else ctx.lineTo(tx(i), ty(v));
+    }
+    ctx.stroke();
+  };
+  const dernier = function (vals) { for (let i = n - 1; i >= 0; i--) if (propre(vals[i])) return i; return -1; };
+  const cI = cssVar("--muted"), cC = cssVar("--series-1");
+  if (D.indiceNom) {
+    courbe(D.indice, cI);
+    const ii = dernier(D.indice);
+    if (ii >= 0) labels.push({ y: ty(D.indice[ii]), texte: D.indiceNom + " " + fmtSigned(D.indice[ii], 2), couleur: cI });
+  }
+  courbe(D.compte, cC);
+  const ic = dernier(D.compte);
+  if (ic >= 0) {
+    point(ctx, tx(ic), ty(D.compte[ic]), cC);
+    labels.push({ y: ty(D.compte[ic]), texte: "compte " + fmtSigned(D.compte[ic], 2), couleur: cC, fort: true });
+  }
+  etiquettesDroite(ctx, labels, x1, y0, y1);
+
+  if (croix !== undefined && croix >= 0) {
+    const X = Math.round(tx(croix)) + 0.5;
+    ctx.strokeStyle = cssVar("--axis"); ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(X, y0); ctx.lineTo(X, y1); ctx.stroke();
+    if (D.indiceNom && propre(D.indice[croix])) point(ctx, tx(croix), ty(D.indice[croix]), cI);
+    if (propre(D.compte[croix])) point(ctx, tx(croix), ty(D.compte[croix]), cC);
+  }
+  if (!tip) return;
+  const quitter = function () { tipCacher(tip); drawDefi(cv, null, D, -1); };
+  const survol = function (ev) {
+    const r = cv.getBoundingClientRect(), px = ev.clientX - r.left;
+    if (px < x0 - 6 || px > x1 + 6) { quitter(); return; }
+    const i = Math.max(0, Math.min(n - 1, Math.floor((px - x0) / G.pas)));
+    drawDefi(cv, null, D, i);
+    const L = [{ nom: "compte", valeur: fmtSigned(D.compte[i], 2), couleur: cC },
+               { nom: "valeur", valeur: montant(D.equity[i], D.devise) }];
+    if (D.indiceNom) L.push({ nom: D.indiceNom, couleur: cI,
+                              valeur: propre(D.indice[i]) ? fmtSigned(D.indice[i], 2) : "pas de cloture" });
+    if (D.actif) {
+      L.push({ nom: "jusqu'a l'objectif", valeur: pts(D.objectif - D.compte[i]) });
+      L.push({ nom: "marge avant le garde-fou", valeur: pts(D.compte[i] - D.plancherBot[i]) });
+      L.push({ nom: "marge avant le contrat", valeur: pts(D.compte[i] - D.plancherContrat[i]) });
+    }
+    tipRemplir(tip, jourLong(D.dates[i]), L);
+    tipPoser(tip, S, tx(i), ev.clientY - r.top);
+  };
+  cv.onmousemove = survol; cv.onmouseleave = quitter; cv.onpointerdown = survol;
+}
+
+// ---------------------------------------------------------------------------
+// Gains et pertes seance par seance, en % du CAPITAL DE DEPART
+// ---------------------------------------------------------------------------
+// Meme denominateur que le garde-fou et que le contrat ("5 % of initial
+// balance") : la barre et la limite parlent de la meme chose. Le domaine
+// contient toujours la limite du contrat : la lecture utile est la distance
+// entre la pire barre et la ligne rouge, pas la forme des petites barres.
+function drawJour(cv, tip, D, survolee) {
+  const S = surface(cv, 190), ctx = S.ctx, n = D.dates.length;
+  if (!n) return;
+  const G = geoSeances(S, n, 52, 128, 10, 26);
+  const x0 = G.x0, x1 = G.x1, y0 = G.y0, y1 = G.y1, tx = G.tx;
+  let lo = 0, hi = 0.004;
+  for (const v of D.jour) if (propre(v)) { lo = Math.min(lo, v); hi = Math.max(hi, v); }
+  if (D.actif) lo = Math.min(lo, -D.contratJour);
+  const marge = (hi - lo) * 0.10; lo -= marge; hi += marge;
+  const ty = function (v) { return y1 - (v - lo) / (hi - lo) * (y1 - y0); };
+
+  axeY(ctx, lo, hi, ty, x0, x1, y0, y1, pctAxe);
+  axeSeances(ctx, D.dates, tx, y0, y1, x1);
+  const labels = [];
+  if (D.actif) {
+    const a = ty(-D.perteJourMax), b = ty(-D.contratJour);
+    seuil(ctx, [x0, x1], [a, a], cssVar("--serious"));
+    seuil(ctx, [x0, x1], [b, b], cssVar("--critical"));
+    labels.push({ y: a, texte: "garde-fou " + fmtSigned(-D.perteJourMax, 0), couleur: cssVar("--serious"), seuil: true });
+    labels.push({ y: b, texte: "contrat " + fmtSigned(-D.contratJour, 0), couleur: cssVar("--critical"), seuil: true });
+  }
+  const w = Math.max(2, Math.min(24, G.pas * 0.62));
+  const cP = cssVar("--pos"), cN = cssVar("--neg");
+  for (let i = 0; i < n; i++) {
+    const v = D.jour[i];
+    if (!propre(v)) continue;
+    ctx.globalAlpha = survolee === undefined || survolee < 0 || survolee === i ? 1 : 0.5;
+    ctx.fillStyle = v >= 0 ? cP : cN;
+    barreV(ctx, tx(i) - w / 2, w, ty(0), ty(v));
+  }
+  ctx.globalAlpha = 1;
+  const z = Math.round(ty(0)) + 0.5;
+  ctx.strokeStyle = cssVar("--axis"); ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(x0, z); ctx.lineTo(x1, z); ctx.stroke();
+  etiquettesDroite(ctx, labels, x1, y0, y1);
+
+  if (!tip) return;
+  const quitter = function () { tipCacher(tip); drawJour(cv, null, D, -1); };
+  const survol = function (ev) {
+    const r = cv.getBoundingClientRect(), i = Math.floor((ev.clientX - r.left - x0) / G.pas);
+    if (i < 0 || i >= n || !propre(D.jour[i])) { quitter(); return; }
+    drawJour(cv, null, D, i);
+    const v = D.jour[i];
+    const L = [{ nom: "variation du jour", valeur: fmtSigned(v, 2), couleur: v >= 0 ? cP : cN },
+               { nom: "en montant", valeur: argent(v * D.depart, D.devise) }];
+    if (D.actif) L.push({ nom: "marge avant le garde-fou", valeur: pts(v + D.perteJourMax) });
+    tipRemplir(tip, jourLong(D.dates[i]), L);
+    tipPoser(tip, S, tx(i), ev.clientY - r.top);
+  };
+  cv.onmousemove = survol; cv.onmouseleave = quitter; cv.onpointerdown = survol;
+}
+
+// ---------------------------------------------------------------------------
+// Detenu contre vise, ligne par ligne
+// ---------------------------------------------------------------------------
+// Point plein : le poids vise. Anneau : ce que tu detiens. Point dans son
+// anneau = ligne alignee ; l'ecart entre les deux, c'est l'ordre que le
+// prochain rebalancement passera. La FORME porte l'identite : les deux
+// marques sont du meme bleu.
+function drawHalteres(cv, tip, L, survolee) {
+  const H = 21, padT = 4, padB = 24, padL = 62, padR = 16;
+  const S = surface(cv, padT + L.length * H + padB), ctx = S.ctx;
+  if (!L.length) return;
+  const x0 = padL, x1 = S.w - padR, y1 = S.h - padB;
+  let hi = 0;
+  for (const r of L) hi = Math.max(hi, r.detenu || 0, r.vise || 0);
+  const ticks = niceTicks(0, (hi || 0.01) * 1.06, 5);
+  hi = Math.max((hi || 0.01) * 1.06, ticks[ticks.length - 1]);
+  const pasT = ticks.length > 1 ? ticks[1] - ticks[0] : 0.01;
+  const tx = function (v) { return x0 + v / hi * (x1 - x0); };
+  ctx.lineWidth = 1; ctx.textAlign = "center"; ctx.textBaseline = "top";
+  for (const t of ticks) {
+    const X = Math.round(tx(t)) + 0.5;
+    ctx.strokeStyle = cssVar(t === 0 ? "--axis" : "--grid");
+    ctx.beginPath(); ctx.moveTo(X, padT); ctx.lineTo(X, y1); ctx.stroke();
+    ctx.fillStyle = cssVar("--muted"); ctx.fillText(fmtPct(t, pasT < 0.01 ? 1 : 0), X, y1 + 7);
+  }
+  const c = cssVar("--series-1");
+  for (let k = 0; k < L.length; k++) {
+    const r = L[k], y = padT + (k + 0.5) * H;
+    if (survolee === k) bandeSurvol(ctx, 2, y - H / 2, S.w - 4, H);
+    ctx.fillStyle = cssVar("--ink-2"); ctx.textAlign = "right"; ctx.textBaseline = "middle";
+    ctx.fillText(r.ticker, x0 - 10, y);
+    const xa = tx(r.detenu || 0), xb = tx(r.vise || 0);
+    if (r.vise > 0 && r.detenu > 0 && Math.abs(xa - xb) > 12) {
+      const dir = xb > xa ? 1 : -1;
+      ctx.strokeStyle = cssVar("--axis"); ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(xa + dir * 7, y); ctx.lineTo(xb - dir * 5, y); ctx.stroke();
+    }
+    if (r.vise > 0) point(ctx, xb, y, c);
+    if (r.detenu > 0) {
+      ctx.beginPath(); ctx.arc(xa, y, 6.5, 0, 6.2832);
+      ctx.lineWidth = 2; ctx.strokeStyle = c; ctx.stroke();
+    }
+  }
+  if (!tip) return;
+  const quitter = function () { tipCacher(tip); drawHalteres(cv, null, L, -1); };
+  const survol = function (ev) {
+    const r = cv.getBoundingClientRect(), py = ev.clientY - r.top, k = Math.floor((py - padT) / H);
+    if (k < 0 || k >= L.length) { quitter(); return; }
+    drawHalteres(cv, null, L, k);
+    const x = L[k], ecart = (x.vise || 0) - (x.detenu || 0);
+    tipRemplir(tip, x.ticker, [
+      { nom: "vise", valeur: fmtPct(x.vise || 0) },
+      { nom: "detenu", valeur: fmtPct(x.detenu || 0) },
+      { nom: !x.vise ? "a solder" : !x.detenu ? "a acheter" : ecart > 0 ? "a renforcer" : "a alleger",
+        valeur: pts(Math.abs(ecart)) }]);
+    tipPoser(tip, S, ev.clientX - r.left, py);
+  };
+  cv.onmousemove = survol; cv.onmouseleave = quitter; cv.onpointerdown = survol;
+}
+
+// ---------------------------------------------------------------------------
+// Gain latent par ligne : barres divergentes autour de zero
+// ---------------------------------------------------------------------------
+function drawLatent(cv, tip, L, dev, survolee) {
+  const H = 21, padT = 4, padB = 6, padL = 62, padR = 86;
+  const S = surface(cv, padT + L.length * H + padB), ctx = S.ctx;
+  if (!L.length) return;
+  const x0 = padL, x1 = S.w - padR;
+  let lo = 0, hi = 0;
+  for (const r of L) { lo = Math.min(lo, r.latent); hi = Math.max(hi, r.latent); }
+  if (hi - lo < 1e-9) hi = lo + 1;
+  const tx = function (v) { return x0 + (v - lo) / (hi - lo) * (x1 - x0); };
+  const cP = cssVar("--pos"), cN = cssVar("--neg");
+  for (let k = 0; k < L.length; k++) {
+    const r = L[k], y = padT + (k + 0.5) * H;
+    if (survolee === k) bandeSurvol(ctx, 2, y - H / 2, S.w - 4, H);
+    ctx.fillStyle = cssVar("--ink-2"); ctx.textAlign = "right"; ctx.textBaseline = "middle";
+    ctx.fillText(r.ticker, x0 - 10, y);
+    ctx.fillStyle = r.latent >= 0 ? cP : cN;
+    barreH(ctx, y - 6, 12, tx(0), tx(r.latent));
+    ctx.fillStyle = cssVar("--ink-2"); ctx.textAlign = "right";
+    ctx.fillText(argent(r.latent, dev), S.w - 6, y);
+  }
+  const z = Math.round(tx(0)) + 0.5;
+  ctx.strokeStyle = cssVar("--axis"); ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(z, padT); ctx.lineTo(z, S.h - padB); ctx.stroke();
+  if (!tip) return;
+  const quitter = function () { tipCacher(tip); drawLatent(cv, null, L, dev, -1); };
+  const survol = function (ev) {
+    const r = cv.getBoundingClientRect(), py = ev.clientY - r.top, k = Math.floor((py - padT) / H);
+    if (k < 0 || k >= L.length) { quitter(); return; }
+    drawLatent(cv, null, L, dev, k);
+    const x = L[k], cout = x.valeur - x.latent;
+    tipRemplir(tip, x.ticker, [
+      { nom: "gain latent", valeur: argent(x.latent, dev), couleur: x.latent >= 0 ? cP : cN },
+      { nom: "sur le prix d'achat", valeur: cout > 0 ? fmtSigned(x.latent / cout, 2) : "n/a" },
+      { nom: "valeur de la ligne", valeur: montant(x.valeur, dev) }]);
+    tipPoser(tip, S, ev.clientX - r.left, py);
+  };
+  cv.onmousemove = survol; cv.onmouseleave = quitter; cv.onpointerdown = survol;
+}
+
+// ---------------------------------------------------------------------------
+// Carte des rendements mensuels
+// ---------------------------------------------------------------------------
+// Echelle DIVERGENTE, bornee au 95e centile des valeurs absolues : sans cette
+// borne un seul mois de krach repousserait toutes les autres cases vers le
+// gris. Les cases au-dela sont saturees, et la legende le dit.
+function grilleMensuelle(m, mode) {
+  const G = { annees: [], cases: {}, detail: {}, total: {}, mode: mode, domaine: 0.05 };
+  const abs = [];
+  for (let k = 0; k < m.mois.length; k++) {
+    const an = m.mois[k].slice(0, 4), mo = parseInt(m.mois[k].slice(5, 7), 10) - 1;
+    if (!G.cases[an]) {
+      G.annees.push(an);
+      G.cases[an] = [null, null, null, null, null, null, null, null, null, null, null, null];
+      G.detail[an] = [null, null, null, null, null, null, null, null, null, null, null, null];
+    }
+    const s = m.strategie[k], i = m.indice ? m.indice[k] : null;
+    const v = mode === "ecart" ? (propre(s) && propre(i) ? s - i : null) : s;
+    G.cases[an][mo] = propre(v) ? v : null;
+    G.detail[an][mo] = { s: s, i: i };
+    if (propre(v)) abs.push(Math.abs(v));
+  }
+  for (const an of G.annees) {
+    // l'annee se COMPOSE, elle ne s'additionne pas
+    let ps = 1, pi = 1, okS = false, okI = true;
+    for (const d of G.detail[an]) {
+      if (!d) continue;
+      if (propre(d.s)) { ps *= 1 + d.s; okS = true; }
+      if (propre(d.i)) pi *= 1 + d.i; else okI = false;
+    }
+    G.total[an] = mode === "ecart" ? (okS && okI ? ps - pi : null) : (okS ? ps - 1 : null);
+  }
+  abs.sort(function (a, b) { return a - b; });
+  const q = abs.length ? abs[Math.min(abs.length - 1, Math.floor(0.95 * abs.length))] : 0.05;
+  const lisibles = [0.01, 0.02, 0.03, 0.05, 0.08, 0.1, 0.15, 0.2, 0.3, 0.5];
+  G.domaine = lisibles.find(function (p) { return p >= q; }) || q;
+  return G;
+}
+// "-0,0" n'est pas un chiffre : un ecart de -0,01 % s'affiche 0,0.
+function caseTexte(v) { return Math.abs(100 * v) < 0.05 ? "0,0" : fmtNum(100 * v, 1); }
+// En mode ecart, l'annee est une DIFFERENCE de rendements : des points, pas des %.
+function totalTexte(t, mode) {
+  if (!propre(t)) return "";
+  return mode === "ecart" ? (t > 0 ? "+" : "") + fmtNum(100 * t, 1) + NB + "pts" : fmtSigned(t, 1);
+}
+function drawCarte(cv, tip, G, survolee) {
+  const colAn = 44, colTot = 66, H = 22, padT = 22, padB = 46;
+  const S = surface(cv, padT + G.annees.length * H + padB), ctx = S.ctx;
+  if (!G.annees.length) return;
+  const x0 = colAn, x1 = S.w - colTot, cw = (x1 - x0) / 12;
+  const couleur = echelleDivergente(), ecrire = cw >= 34;
+  ctx.textBaseline = "middle"; ctx.textAlign = "center"; ctx.fillStyle = cssVar("--muted");
+  for (let m = 0; m < 12; m++)
+    ctx.fillText(cw >= 34 ? MOIS_COURTS[m] : MOIS_COURTS[m][0].toUpperCase(), x0 + (m + 0.5) * cw, padT / 2);
+  ctx.textAlign = "right"; ctx.fillText("annee", S.w - 6, padT / 2);
+  for (let a = 0; a < G.annees.length; a++) {
+    const an = G.annees[a], y = padT + a * H;
+    ctx.fillStyle = cssVar("--ink-2"); ctx.textAlign = "left"; ctx.textBaseline = "middle";
+    ctx.fillText(an, 2, y + H / 2);
+    for (let m = 0; m < 12; m++) {
+      const v = G.cases[an][m];
+      if (!propre(v)) continue;
+      const rgb = couleur(v / G.domaine);
+      ctx.fillStyle = rgbCss(rgb);
+      ctx.fillRect(x0 + m * cw + 1, y + 1, cw - 2, H - 2);           // 2 px d'air entre les cases
+      if (survolee && survolee.a === a && survolee.m === m) {
+        ctx.strokeStyle = cssVar("--ink"); ctx.lineWidth = 1.5;
+        ctx.strokeRect(x0 + m * cw + 1.75, y + 1.75, cw - 3.5, H - 3.5);
+      }
+      if (ecrire) {
+        ctx.fillStyle = encreSur(rgb); ctx.textAlign = "center";
+        ctx.fillText(caseTexte(v), x0 + (m + 0.5) * cw, y + H / 2);
+      }
+    }
+    const t = G.total[an];
+    ctx.fillStyle = cssVar("--ink-2"); ctx.textAlign = "right";
+    ctx.fillText(totalTexte(t, G.mode), S.w - 6, y + H / 2);
+  }
+  // legende d'echelle : le degrade lui-meme, echantillonne en OKLab
+  const ly = padT + G.annees.length * H + 12, lw = Math.max(120, Math.min(280, x1 - x0));
+  for (let k = 0; k < lw; k++) {
+    ctx.fillStyle = rgbCss(couleur(2 * k / (lw - 1) - 1));
+    ctx.fillRect(x0 + k, ly, 1.5, 9);
+  }
+  ctx.fillStyle = cssVar("--muted"); ctx.textBaseline = "top";
+  const borne = function (v) {
+    return G.mode === "ecart" ? (v > 0 ? "+" : "") + fmtNum(100 * v, 0) + NB + "pts" : fmtSigned(v, 0); };
+  ctx.textAlign = "left"; ctx.fillText(borne(-G.domaine) + " et moins", x0, ly + 13);
+  ctx.textAlign = "center"; ctx.fillText("0", x0 + lw / 2, ly + 13);
+  ctx.textAlign = "right"; ctx.fillText(borne(G.domaine) + " et plus", x0 + lw, ly + 13);
+
+  if (!tip) return;
+  const quitter = function () { tipCacher(tip); drawCarte(cv, null, G, null); };
+  const survol = function (ev) {
+    const r = cv.getBoundingClientRect(), px = ev.clientX - r.left, py = ev.clientY - r.top;
+    const a = Math.floor((py - padT) / H), m = Math.floor((px - x0) / cw);
+    if (a < 0 || a >= G.annees.length || m < 0 || m > 11) { quitter(); return; }
+    const an = G.annees[a], v = G.cases[an][m];
+    if (!propre(v)) { quitter(); return; }
+    drawCarte(cv, null, G, { a: a, m: m });
+    const d = G.detail[an][m], L = [];
+    if (G.mode === "ecart") {
+      L.push({ nom: "ecart a l'indice", valeur: pts(v) });
+      L.push({ nom: "strategie", valeur: fmtSigned(d.s, 2) });
+      L.push({ nom: "indice", valeur: fmtSigned(d.i, 2) });
+    } else {
+      L.push({ nom: "strategie", valeur: fmtSigned(v, 2) });
+      if (propre(d.i)) L.push({ nom: "indice", valeur: fmtSigned(d.i, 2) });
+    }
+    tipRemplir(tip, MOIS_LONGS[m] + " " + an, L);
+    tipPoser(tip, S, x0 + (m + 0.5) * cw, py);
+  };
+  cv.onmousemove = survol; cv.onmouseleave = quitter; cv.onpointerdown = survol;
+}
+
+// ---------------------------------------------------------------------------
 // Vue tableau : chaque graphique a son equivalent lisible
 // ---------------------------------------------------------------------------
 function buildTable(host, headers, rows, classer) {
@@ -685,9 +1359,18 @@ function staticRun() {
   const strat = sliceFrom(GRID.dates, v.curve, state.start);
   const univ = sliceFrom(GRID.dates, GRID.reference.univers, state.start);
   const ind = sliceFrom(GRID.dates, GRID.reference.indice, state.start);
+  let mensuels = null;
+  const M = GRID.reference.mensuels;
+  if (M && v.mensuels) {
+    const deb = (state.start || "").slice(0, 7), k = [];
+    for (let j = 0; j < M.mois.length; j++) if (!deb || M.mois[j] >= deb) k.push(j);
+    const pris = function (a) { return k.map(function (j) { return a ? a[j] : null; }); };
+    mensuels = { mois: pris(M.mois), strategie: pris(v.mensuels), univers: pris(M.univers), indice: pris(M.indice) };
+  }
   return { dates: strat.dates, n_assets: GRID.n_assets, duree_ms: 0,
            stats: v.periods[pid] || {}, stats_univers: (GRID.reference.periods[pid] || {}),
-           series: { strategie: strat.values, univers: univ.values, indice: ind.values } };
+           series: { strategie: strat.values, univers: univ.values, indice: ind.values },
+           mensuels: mensuels };
 }
 
 // -- drawdown calcule cote client, identique dans les deux modes -------------
@@ -818,6 +1501,8 @@ function paint(d) {
           " selectionne rien : lance le test du hasard plus bas pour trancher."; }
   el("verdict").className = "verdict " + cls;
   el("verdict").textContent = txt;
+  renderGlissant(d);
+  renderCarte(d);
   majResume();
 
   el("meta").textContent = d.n_assets + " titres" + (d.duree_ms ? " · recalcul " + d.duree_ms + " ms" : "");
@@ -1181,14 +1866,223 @@ function renderOps(d) {
     }));
 
   poserTexte(el("meta"), d.donnees.derniere_cloture + " · " + d.regime.texte);
+  renderPortefeuilleGraphes(d);
 }
+
+// ---------------------------------------------------------------------------
+// Graphiques du compte : le defi, le jour, le portefeuille
+// ---------------------------------------------------------------------------
+let opsHisto = null;
+
+// Tout ce que les deux graphiques du defi dessinent, calcule une fois. Les
+// planchers suivent la regle de `defi.evaluer` : fixes en reference
+// statique, en escalier sous le plus haut en reference glissante.
+function deriverDefi(h) {
+  const f = h.defi || {}, n = h.dates.length;
+  const depart = f.depart || (n ? h.equity[0] : 1);
+  let base = null;
+  for (const v of h.indice || []) if (propre(v)) { base = v; break; }
+  const glissant = f.reference === "glissante";
+  let haut = depart;
+  if (glissant && f.plus_haut && f.plus_haut > Math.max.apply(null, h.equity)) haut = f.plus_haut;
+  const pBot = [], pCon = [];
+  for (let i = 0; i < n; i++) {
+    if (glissant) haut = Math.max(haut, h.equity[i]);
+    const ref = glissant ? haut : depart;
+    pBot.push(ref * (1 - (f.perte_totale_max || 0)) / depart - 1);
+    pCon.push(ref * (1 - (f.contrat_total || 0.10)) / depart - 1);
+  }
+  return {
+    dates: h.dates, equity: h.equity, depart: depart,
+    compte: h.equity.map(function (e) { return e / depart - 1; }),
+    indice: (h.indice || []).map(function (v) { return propre(v) && base ? v / base - 1 : null; }),
+    indiceNom: h.indice_nom, jour: h.perte_jour || [],
+    devise: opsEtatCourant && opsEtatCourant.compte ? opsEtatCourant.compte.devise : "USD",
+    actif: !!f.actif && propre(f.perte_totale_max),
+    objectif: f.objectif || 0, objectifs: h.dates.map(function () { return f.objectif || 0; }),
+    plancherBot: pBot, plancherContrat: pCon,
+    perteJourMax: f.perte_jour_max || 0, contratJour: f.contrat_jour || 0.05,
+    verrou: f.verrou || null,
+  };
+}
+
+function renderDefi(h) {
+  opsHisto = h;
+  const msg = el("ops-defi-msg"), corps = el("ops-defi-corps");
+  if (!h || !h.ok || !h.dates || !h.dates.length) {
+    corps.hidden = true; msg.className = "msg";
+    poserTexte(msg, "Pas encore de courbe : " + ((h && h.raison) || "historique indisponible") + ".");
+    return;
+  }
+  const D = deriverDefi(h), n = D.dates.length, fin = D.compte[n - 1];
+  corps.hidden = false;
+  if (D.verrou) {
+    msg.className = "msg err";
+    poserTexte(msg, "Verrou pose le " + D.verrou.depuis + " : " + (D.verrou.detail || D.verrou.raison) +
+               ". Le bot n'achete plus rien tant qu'il n'est pas leve a la main.");
+  } else { msg.className = "msg"; poserTexte(msg, ""); }
+  poserTexte(el("ops-defi-titre"), D.actif ? "Le defi, seance par seance" : "Le compte, seance par seance");
+
+  let pire = null, iPire = -1;
+  for (let i = 0; i < n; i++) if (propre(D.jour[i]) && (pire === null || D.jour[i] < pire)) { pire = D.jour[i]; iPire = i; }
+  const tPire = tuile("Pire seance", pire === null ? "n/a" : fmtSigned(pire, 2),
+    pire === null ? "il faut deux seances" :
+    jourCourt(D.dates[iPire]) + (D.actif ? ", limite " + fmtSigned(-D.perteJourMax, 0) : ""));
+  poser(el("ops-defi-tuiles"), D.actif
+    ? tuile("Progression", fmtSigned(fin, 2), "objectif " + fmtSigned(D.objectif, 0)) +
+      tuile("Reste a faire", pts(Math.max(0, D.objectif - fin)), "jusqu'a l'objectif") +
+      tuile("Marge", pts(fin - D.plancherBot[n - 1]), "avant le garde-fou (" + fmtSigned(D.plancherBot[n - 1], 0) + ")") +
+      tPire
+    : tuile("Depuis le depart", fmtSigned(fin, 2), n + " seance(s)") +
+      tuile("Valeur", montant(D.equity[n - 1], D.devise), "depart " + montant(D.depart, D.devise)) + tPire);
+
+  const leg = [["compte", cssVar("--series-1")]];
+  if (D.indiceNom) leg.push([D.indiceNom + ", meme point de depart", cssVar("--muted")]);
+  legendeDom(el("legend-defi"), leg);
+  drawDefi(el("cv-defi"), el("tip-defi"), D);
+  drawJour(el("cv-jour"), el("tip-jour"), D);
+
+  const lignes = [];
+  for (let i = n - 1; i >= 0; i--)
+    lignes.push({ cells: [D.dates[i], montant(D.equity[i], D.devise), fmtSigned(D.compte[i], 2),
+                          propre(D.jour[i]) ? fmtSigned(D.jour[i], 2) : "",
+                          propre(D.indice[i]) ? fmtSigned(D.indice[i], 2) : "n/a"] });
+  buildTable(el("tv-defi"), ["Seance", "Valeur", "Depuis le depart", "Jour (du depart)",
+                              D.indiceNom || "Indice"], lignes);
+}
+
+function renderPortefeuilleGraphes(d) {
+  if (!d || !d.connecte) return;
+  const vise = {}, detenu = {};
+  for (const t of d.cible) vise[t.ticker] = t.poids;
+  for (const p of d.positions) detenu[p.ticker] = p.poids;
+  const L = Object.keys(Object.assign({}, vise, detenu)).map(function (t) {
+    return { ticker: t, vise: vise[t] || 0, detenu: detenu[t] || 0 }; });
+  L.sort(function (a, b) { return (b.vise - a.vise) || (b.detenu - a.detenu); });
+  const P = d.positions.map(function (p) { return { ticker: p.ticker, latent: p.latent, valeur: p.valeur }; })
+    .sort(function (a, b) { return b.latent - a.latent; });
+  // Les DEUX blocs sont demasques avant le premier dessin. Ils partagent une
+  // grille : dessine seul, le premier mesurait toute la largeur de la ligne,
+  // puis se retrouvait comprime dans une demi-colonne quand le second
+  // apparaissait - texte ecrase de moitie.
+  el("ops-halteres-bloc").hidden = !L.length;
+  el("ops-latent-bloc").hidden = !P.length;
+  if (L.length) drawHalteres(el("cv-halteres"), el("tip-halteres"), L);
+  if (P.length) drawLatent(el("cv-latent"), el("tip-latent"), P, d.compte.devise);
+}
+
+// L'historique ne doit jamais faire echouer le reste de l'ecran : il gere
+// ses erreurs lui-meme et affiche une phrase a la place de la courbe.
+function opsHistorique() {
+  if (MODE === "static") return Promise.resolve();
+  return post("/api/ops/historique", {}).then(renderDefi).catch(function (e) {
+    renderDefi({ ok: false, raison: e.message });
+  });
+}
+function repeindreOps() {
+  if (opsEtatCourant) renderPortefeuilleGraphes(opsEtatCourant);
+  if (opsHisto) renderDefi(opsHisto);
+}
+// Un canvas masque a une largeur nulle : on redessine la vue VISIBLE au
+// changement de theme ou de taille, et l'autre quand on bascule vers elle.
+function repeindre() {
+  if (document.body.dataset.vue === "ops") repeindreOps();
+  else if (current) paint(current);
+}
+
+// ---------------------------------------------------------------------------
+// Analyse : avance glissante et carte mensuelle
+// ---------------------------------------------------------------------------
+let carteMode = "rendement";
+
+function glissant12(m) {
+  const out = { dates: [], ecart: [], strat: [], indice: [] };
+  for (let k = 11; k < m.mois.length; k++) {
+    let ps = 1, pi = 1, ok = !!m.indice;
+    for (let j = k - 11; ok && j <= k; j++) {
+      if (!propre(m.strategie[j]) || !propre(m.indice[j])) { ok = false; break; }
+      ps *= 1 + m.strategie[j]; pi *= 1 + m.indice[j];
+    }
+    out.dates.push(m.mois[k] + "-01");
+    out.strat.push(ok ? ps - 1 : null);
+    out.indice.push(ok ? pi - 1 : null);
+    out.ecart.push(ok ? ps - pi : null);
+  }
+  return out;
+}
+
+function renderGlissant(d) {
+  const cv = el("cv-glissant");
+  if (!cv) return;
+  const m = d.mensuels, note = el("glissant-note");
+  if (!m || !m.mois || m.mois.length < 13 || !m.indice || !m.indice.some(propre)) {
+    surface(cv, 24);
+    poserTexte(note, !m || !m.mois ? "Pas de rendements mensuels pour cette periode." :
+      "Il faut au moins treize mois, et un indice, pour une premiere fenetre de douze mois.");
+    return;
+  }
+  const g = glissant12(m);
+  drawLines(cv, el("tip-glissant"), {
+    dates: g.dates, height: 220, fillZero: true,
+    // Nom COURT : l'etiquette de bout de trace dispose de 104 px, et une
+    // etiquette qui ne tient pas est rognee par le bord du canvas. Le titre
+    // du graphique porte deja "douze mois".
+    series: [{ name: "avance", color: cssVar("--series-1"),
+               values: g.ecart.map(function (v) { return propre(v) ? 100 * v : null; }) }],
+    yFmt: function (v) { return (v > 0 ? "+" : "") + fmtNum(v, 0) + NB + "pts"; },
+    tipFmt: function (v) { return (v > 0 ? "+" : "") + fmtNum(v, 1) + NB + "pts"; },
+    dateFmt: function (s) { return "12 mois a fin " + moisLong(s.slice(0, 7)); },
+    tipExtra: function (i) { return [["strategie", fmtSigned(g.strat[i], 1)], ["indice", fmtSigned(g.indice[i], 1)]]; },
+  });
+  const v = g.ecart.filter(propre);
+  if (!v.length) { poserTexte(note, ""); return; }
+  const part = v.filter(function (x) { return x > 0; }).length / v.length;
+  const tri = v.slice().sort(function (a, b) { return a - b; }), med = tri[Math.floor(tri.length / 2)];
+  let txt = "La strategie bat l'indice dans " + fmtPct(part, 0) + " des " + v.length +
+            " fenetres de douze mois ; ecart median " + (med > 0 ? "+" : "") + fmtNum(100 * med, 1) + NB + "pts. ";
+  if (part >= 0.4 && part <= 0.6) txt += "Autant de fenetres gagnees que perdues : aucune avance qui se maintienne.";
+  else if (part > 0.6) txt += "Une avance qui revient souvent - a confirmer hors echantillon, et sur l'univers corrige.";
+  else txt += "La strategie passe plus de temps derriere l'indice que devant.";
+  poserTexte(note, txt);
+}
+
+function renderCarte(d) {
+  const cv = el("cv-carte");
+  if (!cv) return;
+  const m = d.mensuels, note = el("carte-note");
+  if (!m || !m.mois || !m.mois.length) {
+    surface(cv, 24); poserTexte(note, "Pas de rendements mensuels pour cette periode."); return;
+  }
+  const aIndice = !!m.indice && m.indice.some(propre);
+  const bE = document.querySelector('[data-carte="ecart"]');
+  if (bE) bE.disabled = !aIndice;
+  const mode = aIndice ? carteMode : "rendement";
+  const G = grilleMensuelle(m, mode);
+  drawCarte(cv, el("tip-carte"), G);
+  poserTexte(note, mode === "ecart"
+    ? "Chaque case : le mois de la strategie MOINS celui de l'indice, en points. Bleu = mois gagne sur l'indice. A droite, l'annee composee."
+    : "Chaque case : le rendement du mois, en %. A droite, l'annee composee.");
+  buildTable(el("tv-carte"), ["Annee"].concat(MOIS_COURTS).concat(["Annee entiere"]),
+    G.annees.map(function (an) {
+      return { cells: [an].concat(G.cases[an].map(function (v) { return propre(v) ? caseTexte(v) : ""; }))
+                          .concat([totalTexte(G.total[an], G.mode)]) }; }));
+}
+
+document.querySelectorAll("[data-carte]").forEach(function (b) {
+  b.onclick = function () {
+    carteMode = b.getAttribute("data-carte");
+    document.querySelectorAll("[data-carte]").forEach(function (x) {
+      x.setAttribute("aria-pressed", x === b ? "true" : "false"); });
+    if (current) renderCarte(current);
+  };
+});
 
 function opsRecharger(silencieux) {
   // Un rafraichissement automatique n'annonce pas "Lecture du compte..." :
   // remplacer un titre lisible par un message d'attente toutes les minutes
   // donne l'impression d'une page qui se cherche.
   if (!silencieux) poserTexte(el("ops-titre"), "Lecture du compte...");
-  return post("/api/ops/etat", {}).then(renderOps).catch(function (e) {
+  return post("/api/ops/etat", {}).then(renderOps).then(opsHistorique).catch(function (e) {
     el("ops-erreur").className = "msg err";
     el("ops-erreur").textContent = "Erreur : " + e.message;
   });
@@ -1431,6 +2325,7 @@ function setVue(v) {
     if (!opsCharge) { opsCharge = true; opsRecharger().then(function () { opsPlanifier(OPS_PERIODE_CALME); }); }
   }
   if (v === "analyse" && current) paint(current);
+  if (v === "ops") repeindreOps();
 }
 el("vue-analyse").onclick = function () { setVue("analyse"); };
 el("vue-ops").onclick = function () { setVue("ops"); };
@@ -1483,11 +2378,11 @@ el("theme").onclick = function () {
   const now = document.documentElement.getAttribute("data-theme");
   const dark = now ? now === "dark" : window.matchMedia("(prefers-color-scheme: dark)").matches;
   document.documentElement.setAttribute("data-theme", dark ? "light" : "dark");
-  if (current) paint(current);
+  repeindre();
 };
-window.addEventListener("resize", function () { clearTimeout(timer); timer = setTimeout(function () { if (current) paint(current); }, 150); });
+window.addEventListener("resize", function () { clearTimeout(timer); timer = setTimeout(repeindre, 150); });
 if (window.matchMedia) window.matchMedia("(prefers-color-scheme: dark)")
-  .addEventListener("change", function () { if (current) paint(current); });
+  .addEventListener("change", repeindre);
 refresh();
 """
 
@@ -1584,6 +2479,14 @@ PAGE = """<!doctype html>
       <div class="plot"><canvas id="cv-perf"></canvas><div class="tip" id="tip-perf"></div></div>
       <div class="verdict" id="verdict"></div>
       <details class="tv avance"><summary>Vue tableau (valeurs de fin d'annee)</summary><div id="tv-perf"></div></details>
+
+      <h4>Avance sur l'indice, sur douze mois glissants</h4>
+      <p class="regarder">A regarder : <b>combien de temps la courbe passe au-dessus de zero.</b>
+        Chaque point compare les douze mois qui s'achevent. Une vraie avance s'y voit comme une
+        courbe qui reste en haut ; une avance de hasard, comme une courbe qui oscille autour
+        de zero.</p>
+      <div class="plot"><canvas id="cv-glissant"></canvas><div class="tip" id="tip-glissant"></div></div>
+      <p class="note-graphe" id="glissant-note"></p>
     </section>
 
     <section class="card">
@@ -1596,6 +2499,18 @@ PAGE = """<!doctype html>
         au sommet precedent.</p></details>
       <div class="legend" id="legend-dd"></div>
       <div class="plot"><canvas id="cv-dd"></canvas><div class="tip" id="tip-dd"></div></div>
+
+      <h4>Mois par mois</h4>
+      <p class="regarder">A regarder : <b>les series de cases rouges.</b> Une carte bleue piquee de
+        rouge se detient bien ; trois mois rouges d'affilee, c'est la que l'on abandonne une
+        strategie - souvent juste avant qu'elle ne reparte.</p>
+      <div class="bascule" role="group" aria-label="Mesure affichee">
+        <button type="button" data-carte="rendement" aria-pressed="true">Rendement</button>
+        <button type="button" data-carte="ecart" aria-pressed="false">Ecart a l'indice</button>
+      </div>
+      <div class="plot"><canvas id="cv-carte"></canvas><div class="tip" id="tip-carte"></div></div>
+      <p class="note-graphe" id="carte-note"></p>
+      <details class="tv avance"><summary>Vue tableau</summary><div id="tv-carte"></div></details>
     </section>
 
     <section class="card">
@@ -1745,6 +2660,26 @@ PAGE = """<!doctype html>
       <div class="controles" id="ops-controles"></div>
     </section>
 
+    <section class="card" id="ops-defi">
+      <h3 id="ops-defi-titre">Le defi, seance par seance</h3>
+      <p class="regarder">A regarder : <b>la distance entre la courbe et les lignes.</b>
+        En haut l'objectif ; en bas deux planchers - le garde-fou, ou le bot s'arrete de
+        lui-meme, puis la limite ou le contrat elimine. L'ecart entre ces deux planchers est
+        ta marge : c'est lui qui separe s'arreter de se faire arreter.</p>
+      <div id="ops-defi-msg" class="msg">Lecture de l'historique...</div>
+      <div id="ops-defi-corps" hidden>
+        <div class="tiles" id="ops-defi-tuiles"></div>
+        <div class="legend" id="legend-defi"></div>
+        <div class="plot"><canvas id="cv-defi"></canvas><div class="tip" id="tip-defi"></div></div>
+        <h4>Gains et pertes, seance par seance</h4>
+        <p class="regarder">En % du <b>capital de depart</b>, comme le contrat les compte - et
+          non de la valeur de la veille. Chaque barre est a l'aplomb de sa seance sur la
+          courbe du dessus.</p>
+        <div class="plot"><canvas id="cv-jour"></canvas><div class="tip" id="tip-jour"></div></div>
+        <details class="tv"><summary>Vue tableau</summary><div id="tv-defi"></div></details>
+      </div>
+    </section>
+
     <section class="card">
       <h3><span class="num">1.</span>Ordres a passer</h3>
       <p class="regarder">Calcules a partir du meme code que la ligne de commande : le
@@ -1767,6 +2702,19 @@ PAGE = """<!doctype html>
         aujourd'hui. Attention aux valorisations : le courtier marque au marche, le plan
         au dernier cours en cache. Un ecart de plus de 2 % entre les deux fait echouer le
         controle "Valorisation coherente" - c'est le signe d'un cache perime.</p>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:22px;margin-bottom:18px">
+        <div id="ops-halteres-bloc" hidden>
+          <h4 style="margin-top:8px">Detenu contre vise</h4>
+          <div class="legend"><span><i class="point"></i>vise par la strategie</span>
+            <span><i class="creux"></i>detenu</span></div>
+          <div class="plot"><canvas id="cv-halteres"></canvas><div class="tip" id="tip-halteres"></div></div>
+        </div>
+        <div id="ops-latent-bloc" hidden>
+          <h4 style="margin-top:8px">Gain latent par ligne</h4>
+          <div class="legend"><span>depuis le prix d'achat, montants a droite</span></div>
+          <div class="plot"><canvas id="cv-latent"></canvas><div class="tip" id="tip-latent"></div></div>
+        </div>
+      </div>
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:22px">
         <div><h3 style="font-size:13px;margin:0 0 8px">Detenu</h3><div id="ops-positions"></div></div>
         <div><h3 style="font-size:13px;margin:0 0 8px">Vise</h3><div id="ops-cible"></div></div>

@@ -15,8 +15,9 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import math
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from . import broker, defi, executions as exe, live, orders as ord_mod
@@ -195,6 +196,35 @@ def journaliser(lignes, chemin=None) -> None:
             w.writerow({c: ligne.get(c, "") for c in COLONNES})
 
 
+def serie_historique(brut) -> tuple:
+    """Reponse brute du courtier -> (dates 'AAAA-MM-JJ', valeurs du compte).
+
+    Trois pieges, tous rencontres sur un vrai compte :
+
+    * les horodatages sont des secondes Unix, poses au debut de la seance a
+      New York - entre 04:00 et 14:30 UTC selon la saison et la version de
+      l'API. La date UTC est donc toujours celle de la seance, sans base de
+      fuseaux horaires (absente de Python 3.8 sous Windows).
+    * un compte neuf renvoie des zeros ou des null AVANT son premier
+      versement. Les garder ferait partir la courbe de zero, soit un
+      rendement infini le premier jour.
+    * deux horodatages peuvent tomber le meme jour : on garde le dernier.
+    """
+    brut = brut or {}
+    par_jour = {}
+    for t, v in zip(brut.get("timestamp") or [], brut.get("equity") or []):
+        try:
+            v, t = float(v), int(t)
+        except (TypeError, ValueError):
+            continue
+        if not math.isfinite(v) or v <= 0:
+            continue
+        jour = datetime.fromtimestamp(t, tz=timezone.utc).strftime("%Y-%m-%d")
+        par_jour[jour] = v
+    dates = sorted(par_jour)
+    return dates, [par_jour[d] for d in dates]
+
+
 class Operations:
     """Etat et actions du compte de simulation. Aucun acces a l'argent reel."""
 
@@ -282,6 +312,94 @@ class Operations:
 
         out["empreinte"] = hashlib.sha1(
             "|".join(morceaux).encode("utf-8")).hexdigest()[:16]
+        return out
+
+    # -- l'historique du compte, pour les courbes -------------------------
+    def _parametres_defi(self) -> dict:
+        """Les barrieres telles que `defi.evaluer` les applique, a l'identique.
+
+        Le graphique doit mesurer ce que mesure le garde-fou, sinon la barre
+        dessinee et la limite qui declenche ne parlent pas de la meme chose.
+        Deux seuils par cote : celui ou le BOT s'arrete, et celui ou le
+        CONTRAT elimine. L'ecart entre les deux est la marge - la seule chose
+        qui separe "s'arreter" de "se faire arreter".
+        """
+        p = defi.parametres(self.cfg) or {}
+        etat = defi.lire_etat()
+        return {
+            "actif": bool(p),
+            "depart": etat.get("capital_depart"),
+            "plus_haut": etat.get("plus_haut"),
+            "verrou": etat.get("verrou"),
+            "reference": p.get("reference", "statique"),
+            "objectif": p.get("objectif"),
+            "perte_jour_max": p.get("perte_jour_max"),
+            "perte_totale_max": p.get("perte_totale_max"),
+            # Les seuils du CONTRAT ne pilotent rien dans le bot - seules les
+            # marges ci-dessus le font. Ils ne servent qu'a dessiner la ligne
+            # que l'on ne doit jamais atteindre.
+            "contrat_jour": float(self.cfg.get("defi.contrat_perte_jour", 0.05)),
+            "contrat_total": float(self.cfg.get("defi.contrat_perte_totale", 0.10)),
+        }
+
+    def historique(self, periode: str = "3M") -> dict:
+        """Le compte seance par seance, l'indice aligne, et les barrieres du defi.
+
+        Ne recalcule rien et ne prend pas le verrou du moteur : un appel au
+        courtier et une lecture du panel deja en memoire. Les courbes restent
+        donc disponibles pendant qu'un backtest occupe la vue analyse.
+
+        Renvoie toujours un dictionnaire. `ok` vaut False, avec une `raison`
+        lisible, quand l'historique manque - courtier qui ne sait pas le
+        fournir, compte trop neuf, reseau. Une courbe vide accompagnee d'une
+        phrase vaut mieux qu'une erreur rouge.
+
+        `perte_jour` suit la definition du garde-fou : ecart d'equity du jour
+        rapporte au CAPITAL DE DEPART, comme le contrat ("5 % of initial
+        balance"), et non a l'equity de la veille.
+        """
+        out = {"ok": False, "raison": "", "dates": [], "equity": [],
+               "perte_jour": [], "indice": [], "indice_nom": None,
+               "defi": self._parametres_defi()}
+
+        lire = getattr(self.api, "historique", None)
+        if lire is None:
+            out["raison"] = "ce courtier ne fournit pas l'historique du compte"
+            return out
+        try:
+            dates, equity = serie_historique(lire(periode))
+        except Exception as exc:
+            out["raison"] = "historique indisponible : %s" % str(exc)[:160]
+            return out
+        if not dates:
+            out["raison"] = ("le courtier n'a encore enregistre aucune seance "
+                             "pour ce compte")
+            return out
+
+        depart = float(out["defi"]["depart"] or equity[0])
+        perte_jour = [None] + [(equity[i] - equity[i - 1]) / depart
+                               for i in range(1, len(equity))]
+
+        # L'indice : uniquement aux dates ou une cloture EXISTE. Pas de report
+        # du dernier cours connu : le dernier point montrerait l'indice
+        # immobile le jour meme ou le compte bouge, et inventerait l'ecart.
+        nom = self.cfg.get("universe.benchmark")
+        indice = [None] * len(dates)
+        try:
+            df = (self._charger_prix() or {}).get(nom) if nom else None
+            if df is not None and len(df.index):
+                close = df["close"] if "close" in df.columns else df.iloc[:, 0]
+                par_date = {d.strftime("%Y-%m-%d"): float(v)
+                            for d, v in close.dropna().items()}
+                indice = [par_date.get(d) for d in dates]
+                indice = [v if v is not None and math.isfinite(v) else None
+                          for v in indice]
+        except Exception:
+            pass
+
+        out.update({"ok": True, "dates": dates, "equity": equity,
+                    "perte_jour": perte_jour, "indice": indice,
+                    "indice_nom": nom if any(v is not None for v in indice) else None})
         return out
 
     def disponible(self) -> dict:
