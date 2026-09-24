@@ -257,11 +257,17 @@ class TestSanteRemonteeDansLeBilan:
         assert "COUPE-CIRCUIT" in b["resume"]
 
     def test_un_coupe_circuit_sain_ne_declenche_rien(self):
+        """La date doit etre RELATIVE : une date en dur devient « muette »
+        des le lendemain, et le test se met a echouer tout seul. C'est
+        exactement ce qui est arrive le 22 septembre 2026."""
+        from datetime import datetime, timedelta
         from quantbot.surveillance import bilan
-        b = bilan({"dernier_passage": "2026-09-21T21:00:00", "dernier_resultat": "ok"},
+        recent = (datetime.now() - timedelta(minutes=10)).isoformat()
+        b = bilan({"dernier_passage": datetime.now().isoformat(), "dernier_resultat": "ok"},
                   {"conforme": True}, {"ok": True},
                   etat_coupe_circuit={"echecs_consecutifs": 0,
-                                      "dernier_succes": "2026-09-21T15:00:00"})
+                                      "dernier_succes": recent,
+                                      "derniere_tentative": recent})
         assert b["coupe_circuit"]["niveau"] == "normal"
 
 

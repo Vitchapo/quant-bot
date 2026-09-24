@@ -173,3 +173,55 @@ class TestLAppelQuiNExistaitPas:
         pos_fetch = source.index("rafraichir")
         assert pos_verrou < pos_fetch, ("le robot met les cours a jour avant de "
                                         "regarder le verrou")
+
+
+class TestBattementDeCoeur:
+    """Le defaut trouve le 22 septembre 2026.
+
+    `_ecrire_etat` n'etait appelee que sur les chemins qui AGISSENT. Or le
+    robot ne fait rien six soirs sur sept - c'est son fonctionnement normal,
+    voulu et documente. Son etat ne bougeait donc pas, et `sante_robot`, qui
+    lit `dernier_passage`, ne pouvait pas distinguer « il tourne et n'a rien a
+    faire » de « il ne tourne plus du tout ».
+
+    La veille a crie « aucun passage depuis 83 h » alors que le robot etait
+    passe la veille ET l'avant-veille. Une alerte qui crie pour rien est une
+    alerte qu'on finit par ignorer - c'est ecrit dans `surveillance.py`, et
+    c'etait vrai ici.
+    """
+
+    def test_le_battement_ecrit_le_passage(self, tmp_path):
+        f = tmp_path / "etat.json"
+        robot._battement({}, f, "rien a faire")
+        d = robot._lire_etat(f)
+        assert d["dernier_passage"] and d["dernier_resultat"] == "rien a faire"
+
+    def test_il_NE_TOUCHE_PAS_au_dernier_signal(self, tmp_path):
+        """`dernier_signal` enregistre ce qui a ete EXECUTE. Un passage sans
+        action n'execute rien - l'ecraser ferait rejouer un rebalancement."""
+        f = tmp_path / "etat.json"
+        robot._battement({"dernier_signal": "2026-09-11"}, f, "rien a faire")
+        assert robot._lire_etat(f)["dernier_signal"] == "2026-09-11"
+
+    def test_tous_les_chemins_sans_action_battent(self):
+        """Le test de couture : chaque `return RIEN_A_FAIRE` et chaque
+        `return ERREUR` de `passer()` doit etre precede d'un battement."""
+        import inspect
+        source = inspect.getsource(robot.passer)
+        lignes = source.splitlines()
+        manquants = []
+        for i, l in enumerate(lignes):
+            if "return RIEN_A_FAIRE" in l or "return ERREUR" in l:
+                fenetre = "\n".join(lignes[max(0, i - 6):i])
+                if "_battement" not in fenetre and "_ecrire_etat" not in fenetre:
+                    manquants.append(l.strip())
+        assert not manquants, "sorties sans battement : %s" % manquants
+
+    def test_la_veille_voit_un_robot_vivant_qui_ne_fait_rien(self, tmp_path):
+        """Le scenario complet : le robot passe, n'a rien a faire, et la
+        veille doit le considerer comme VIVANT."""
+        from quantbot.surveillance import sante_robot
+        f = tmp_path / "etat.json"
+        robot._battement({"dernier_signal": "2026-09-11"}, f, "rien a faire (deja_fait)")
+        s = sante_robot(robot._lire_etat(f))
+        assert s["niveau"] == "normal", s["message"]

@@ -174,7 +174,8 @@ def main() -> int:
             meme = Path(attendu).resolve() == Path(sys.executable).resolve()
         except OSError:
             meme = str(attendu) == str(sys.executable)
-        if not meme and Path(attendu).exists() and not args.pas_de_relance:
+        if (not meme and os.name == "nt" and Path(attendu).exists()
+                and not args.pas_de_relance):
             # On se RELANCE avec l'interpreteur de la tache, au lieu de
             # demander a l'utilisateur de recopier une commande.
             #
@@ -189,7 +190,13 @@ def main() -> int:
             r = subprocess.run([attendu, str(Path(__file__).resolve()),
                                 "--pas-de-relance"] + sys.argv[1:])
             return r.returncode
-        if not meme and not Path(attendu).exists():
+        if not meme and not Path(attendu).exists() and os.name == "nt":
+            # Le garde `os.name == "nt"` n'est pas une precaution de style.
+            # Tester l'existence d'un chemin Windows depuis Linux renvoie
+            # TOUJOURS False : sans lui, ce script annonce « l'interpreteur de
+            # la tache n'existe plus » sur une machine ou la tache tourne tres
+            # bien. C'est arrive le 21 septembre 2026, et l'information fausse
+            # a ete repetee deux fois avant d'etre vue.
             print("\n  ATTENTION : l'interpreteur de la tache n'existe plus :")
             print("    %s" % attendu)
             print("  Recree la tache apres cette preparation :")

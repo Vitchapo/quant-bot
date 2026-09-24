@@ -122,6 +122,33 @@ def _ecrire_etat(etat, chemin=ETAT) -> None:
     chemin.write_text(json.dumps(etat, indent=1, ensure_ascii=False), encoding="utf-8")
 
 
+
+def _battement(etat: dict, chemin, resultat: str) -> None:
+    """Enregistre QU'ON EST PASSE, quel que soit le verdict.
+
+    Pourquoi c'est separe de l'ecriture d'etat normale
+    --------------------------------------------------
+    `_ecrire_etat` n'etait appelee que sur les chemins qui AGISSENT. Un robot
+    qui tourne tous les soirs et n'a rien a faire - le cas le plus frequent,
+    six soirs sur sept - ne touchait donc pas son etat. `sante_robot`, qui lit
+    `dernier_passage`, ne pouvait pas distinguer « il tourne et n'a rien a
+    faire » de « il ne tourne plus ».
+
+    Consequence observee le 22 septembre 2026 : la veille criait « aucun
+    passage depuis 83 h » alors que le robot etait passe la veille et
+    l'avant-veille. Une alerte qui crie pour rien est une alerte qu'on finit
+    par ignorer - et c'est le seul mode de defaillance qui rend une
+    surveillance pire que son absence. C'est ecrit dans `surveillance.py`, et
+    c'etait vrai ici.
+
+    `dernier_signal` n'est PAS touche : il enregistre ce qui a ete execute, et
+    un passage sans action n'execute rien.
+    """
+    _ecrire_etat(dict(etat,
+                      dernier_passage=datetime.now().isoformat(timespec="seconds"),
+                      dernier_resultat=resultat), Path(chemin))
+
+
 class Rapport:
     """Ecrit a l'ecran ET dans un fichier : personne ne regardera l'ecran."""
 
@@ -193,12 +220,14 @@ def passer(args) -> int:
             if not info.get("ok", True):
                 rapport("  Les cours n'ont PAS ete completes. On s'arrete :")
                 rapport("  decider sur des cours perimes serait pire que ne rien faire.")
+                _battement(etat, args.etat, "arret : cours non completes")
                 rapport.clore("ARRET - cours non completes")
                 return ERREUR
         except Exception as exc:
             rapport("  ECHEC de la mise a jour : %s" % str(exc)[:200])
             rapport("  On s'arrete : decider sur des cours perimes serait pire que")
             rapport("  ne rien faire.")
+            _battement(etat, args.etat, "arret : donnees indisponibles")
             rapport.clore("ARRET - donnees indisponibles")
             return ERREUR
 
@@ -208,6 +237,7 @@ def passer(args) -> int:
     echus = live.signaux_echus(close.index, frequence)
     if len(echus) == 0:
         rapport("  aucun signal revolu dans l'historique.")
+        _battement(etat, args.etat, "rien a faire (aucun signal revolu)")
         rapport.clore("RIEN A FAIRE")
         return RIEN_A_FAIRE
 
@@ -227,6 +257,7 @@ def passer(args) -> int:
     rapport("  decision : %s - %s" % (decision, raison))
 
     if decision in (AUCUN, DEJA_FAIT, ATTENDRE):
+        _battement(etat, args.etat, "rien a faire (%s)" % decision)
         rapport.clore("RIEN A FAIRE - " + raison)
         return RIEN_A_FAIRE
     if decision == TROP_TARD:
@@ -247,6 +278,7 @@ def passer(args) -> int:
     etat_compte = ops.etat(signal=signal)
     if not etat_compte.get("connecte"):
         rapport("  courtier injoignable : %s" % etat_compte.get("erreur", "")[:200])
+        _battement(etat, args.etat, "arret : courtier injoignable")
         rapport.clore("ARRET - courtier injoignable")
         return ERREUR
 
@@ -301,6 +333,8 @@ def passer(args) -> int:
                 % (len(etat_compte["ordres"]), "a blanc"))
         for o in etat_compte["ordres"]:
             rapport("    %-6s %-5s %10.2f  %s" % (o["ticker"], o["sens"], o["montant"], o["motif"]))
+        _battement(etat, args.etat, "a blanc, %d ordre(s) simules"
+                   % len(etat_compte["ordres"]))
         rapport.clore("A BLANC - rien envoye")
         return RIEN_A_FAIRE
 
