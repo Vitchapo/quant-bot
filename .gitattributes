@@ -1,0 +1,5 @@
+# Les scripts Windows restent en CRLF sur TOUTE machine, quel que soit le
+# reglage core.autocrlf du PC qui clone : un .bat en fins de ligne Unix se
+# comporte de facon imprevisible sous cmd.exe (tests/test_preparer_ftmo.py).
+*.bat text eol=crlf
+*.ps1 text eol=crlf
