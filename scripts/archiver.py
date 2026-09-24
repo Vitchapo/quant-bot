@@ -23,7 +23,9 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import shutil
 import sys
+import tempfile
 import zipfile
 from datetime import datetime
 from pathlib import Path
@@ -93,15 +95,41 @@ def _compter_tests() -> int:
     return n
 
 
+PREFIXE_TEMPORAIRE = "quantbot-archive-"
+
+
+def _nettoyer(chemin) -> None:
+    """Supprime le dossier temporaire de construction, et RIEN d'autre.
+
+    Jusqu'au 24 septembre 2026, la boucle `for dossier in DOSSIERS` reutilisait
+    le nom de la variable qui designait le dossier temporaire. Apres la boucle,
+    elle valait ".git" - le dernier element de DOSSIERS - et
+    rmtree(".git", ignore_errors=True) effacait le depot du projet, en silence,
+    a chaque archive : donc a chaque passage de la suite de tests. Sous Windows,
+    seuls les objets (fichiers en lecture seule) survivaient ; HEAD, config,
+    refs et index disparaissaient. C'est arrive au moins le 22 septembre 2026
+    a 23 h 22.
+
+    Le garde rend cette classe d'erreur impossible : on ne supprime qu'un
+    dossier cree par mkdtemp avec notre prefixe, sous le repertoire temporaire
+    du systeme. Tout autre chemin est une erreur de programmation, et elle doit
+    faire du bruit - c'est le silence d'ignore_errors qui l'a cachee.
+    """
+    p = Path(chemin).resolve()
+    tmp = Path(tempfile.gettempdir()).resolve()
+    if tmp not in p.parents or not p.name.startswith(PREFIXE_TEMPORAIRE):
+        raise RuntimeError("refus de supprimer %s : ce n'est pas le dossier "
+                           "temporaire de l'archive" % p)
+    shutil.rmtree(p, ignore_errors=True)
+
+
 def construire(sortie: Path) -> int:
     # L'archive est batie dans un dossier temporaire du systeme, verifiee la-bas,
     # et seulement ensuite COPIEE a destination. Deux raisons : une archive
     # douteuse n'atteint jamais le dossier de sortie, et la copie ecrase sans
     # avoir besoin de supprimer - ce que certains montages interdisent.
-    import shutil
-    import tempfile
-    dossier = tempfile.mkdtemp(prefix="quantbot-archive-")
-    provisoire = Path(dossier) / "archive.zip"
+    temporaire = tempfile.mkdtemp(prefix=PREFIXE_TEMPORAIRE)
+    provisoire = Path(temporaire) / "archive.zip"
     sortie.parent.mkdir(parents=True, exist_ok=True)
     n = 0
     with zipfile.ZipFile(provisoire, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
@@ -126,14 +154,14 @@ def construire(sortie: Path) -> int:
 
     problemes = verifier(provisoire)
     if problemes:
-        shutil.rmtree(dossier, ignore_errors=True)
+        _nettoyer(temporaire)
         print("ARCHIVE REFUSEE - elle n'a pas ete ecrite :", file=sys.stderr)
         for p in problemes:
             print("  " + p, file=sys.stderr)
         return 1
 
     shutil.copyfile(provisoire, sortie)
-    shutil.rmtree(dossier, ignore_errors=True)
+    _nettoyer(temporaire)
     taille = sortie.stat().st_size
     print("%s  -  %d fichiers, %.2f Mo" % (sortie, n, taille / 1e6))
     print("Verifications passees : aucun chemin interdit, aucun motif de cle.")
