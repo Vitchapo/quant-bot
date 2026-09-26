@@ -196,15 +196,26 @@ def journaliser(lignes, chemin=None) -> None:
             w.writerow({c: ligne.get(c, "") for c in COLONNES})
 
 
+#: Recul applique a un horodatage quotidien du courtier avant d'en lire la date.
+#: Tout instant entre la cloture d'une seance (20:00 UTC l'ete, 21:00 l'hiver)
+#: et 06:00 UTC le lendemain retombe ainsi sur cette seance.
+RECUL_CLOTURE = 6 * 3600
+
+
 def serie_historique(brut) -> tuple:
     """Reponse brute du courtier -> (dates 'AAAA-MM-JJ', valeurs du compte).
 
     Trois pieges, tous rencontres sur un vrai compte :
 
-    * les horodatages sont des secondes Unix, poses au debut de la seance a
-      New York - entre 04:00 et 14:30 UTC selon la saison et la version de
-      l'API. La date UTC est donc toujours celle de la seance, sans base de
-      fuseaux horaires (absente de Python 3.8 sous Windows).
+    * le courtier horodate la cloture de la seance J a minuit New York le
+      LENDEMAIN (04:00 UTC l'ete, 05:00 l'hiver). Lire la date UTC decalait
+      tout le compte d'un jour : des points dates du samedi, aucun du lundi,
+      et chaque cloture du compte comparee a celle de l'indice du jour
+      SUIVANT. Constate le 26 septembre 2026 sur le compte papier, et verifie
+      contre la variation du jour affichee par le courtier. On recule donc de
+      six heures avant de lire la date - sans base de fuseaux horaires,
+      absente de Python 3.8 sous Windows. Un samedi ou un dimanche restant ne
+      peut pas etre une cloture : il est ecarte.
     * un compte neuf renvoie des zeros ou des null AVANT son premier
       versement. Les garder ferait partir la courbe de zero, soit un
       rendement infini le premier jour.
@@ -219,8 +230,10 @@ def serie_historique(brut) -> tuple:
             continue
         if not math.isfinite(v) or v <= 0:
             continue
-        jour = datetime.fromtimestamp(t, tz=timezone.utc).strftime("%Y-%m-%d")
-        par_jour[jour] = v
+        seance = datetime.fromtimestamp(t - RECUL_CLOTURE, tz=timezone.utc)
+        if seance.weekday() >= 5:
+            continue
+        par_jour[seance.strftime("%Y-%m-%d")] = v
     dates = sorted(par_jour)
     return dates, [par_jour[d] for d in dates]
 
@@ -375,6 +388,16 @@ class Operations:
             out["raison"] = ("le courtier n'a encore enregistre aucune seance "
                              "pour ce compte")
             return out
+
+        # Un compte peut rester en liquidites plusieurs seances avant ses
+        # premiers achats. Ces points plats ne disent rien, et ils faussent la
+        # comparaison : l'indice, rebase au premier point, y engrangeait des
+        # jours de hausse que le compte ne pouvait pas suivre (+0,8 pt pour SPY
+        # le 26/09/2026). On part donc de la DERNIERE seance en liquidites.
+        premier = next((i for i in range(1, len(equity))
+                        if abs(equity[i] - equity[0]) > 1e-6 * abs(equity[0])), None)
+        if premier is not None and premier > 1:
+            dates, equity = dates[premier - 1:], equity[premier - 1:]
 
         depart = float(out["defi"]["depart"] or equity[0])
         perte_jour = [None] + [(equity[i] - equity[i - 1]) / depart

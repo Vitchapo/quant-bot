@@ -7,7 +7,7 @@ Ordre d'importance :
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import numpy as np
 import pandas as pd
@@ -19,7 +19,14 @@ from quantbot.operations import Operations, serie_historique
 
 
 def _ts(jour, heure=4):
-    """Horodatage Unix d'une seance, pose comme le fait le courtier."""
+    """Horodatage que le courtier pose pour la CLOTURE de la seance `jour` :
+    minuit New York le lendemain, soit 04:00 UTC l'ete (05:00 l'hiver)."""
+    lendemain = datetime(*map(int, jour.split("-")), tzinfo=timezone.utc) + timedelta(days=1)
+    return int(lendemain.replace(hour=heure).timestamp())
+
+
+def _ts_brut(jour, heure=4):
+    """Horodatage a une date UTC donnee, sans interpretation."""
     return int(datetime(*map(int, jour.split("-")), heure, tzinfo=timezone.utc).timestamp())
 
 
@@ -84,15 +91,46 @@ class TestLectureBrute:
         dates, equity = serie_historique(brut)
         assert dates == ["2026-09-14"] and equity == [100000.0]
 
-    def test_la_date_est_celle_de_la_seance_quelle_que_soit_l_heure(self):
-        """04:00 UTC (minuit a New York) ou 13:30 UTC (ouverture) : meme seance."""
-        for heure in (4, 5, 13, 14):
-            dates, _ = serie_historique({"timestamp": [_ts("2026-09-15", heure)],
+    def test_la_cloture_est_datee_de_sa_seance_et_non_du_lendemain(self):
+        """Minuit New York le samedi (04:00 UTC l'ete, 05:00 l'hiver), ou
+        00:00 UTC : c'est la cloture du VENDREDI."""
+        for heure in (0, 4, 5):
+            dates, _ = serie_historique({"timestamp": [_ts("2026-09-18", heure)],
                                          "equity": [1.0]})
-            assert dates == ["2026-09-15"], heure
+            assert dates == ["2026-09-18"], heure
+        hiver, _ = serie_historique({"timestamp": [_ts_brut("2026-12-05", 5)],
+                                     "equity": [1.0]})
+        assert hiver == ["2026-12-04"]
+
+    def test_la_serie_du_26_septembre_2026(self):
+        """Les dates UTC que le courtier renvoyait vraiment : du mardi 15 au
+        samedi 26, sans dimanche ni lundi. Valeurs relevees : 100 567 $
+        (infobulle du tableau de bord, datee a tort du samedi 19),
+        101 369,07 $ a la cloture du jeudi 24 et 100 254,00 $ la veille
+        (capture du courtier du 25 septembre, 01 h 54, moins la variation du
+        jour de 1 115,07 $). Les autres sont des bouche-trous."""
+        bruts = ["2026-09-15", "2026-09-16", "2026-09-17", "2026-09-18", "2026-09-19",
+                 "2026-09-22", "2026-09-23", "2026-09-24", "2026-09-25", "2026-09-26"]
+        valeurs = [1e5, 1e5, 1e5, 1e5, 100567.0, 100900.0, 100300.0,
+                   100254.0, 101369.07, 101970.0]
+        dates, equity = serie_historique({"timestamp": [_ts_brut(j) for j in bruts],
+                                          "equity": valeurs})
+        assert dates == ["2026-09-14", "2026-09-15", "2026-09-16", "2026-09-17",
+                         "2026-09-18", "2026-09-21", "2026-09-22", "2026-09-23",
+                         "2026-09-24", "2026-09-25"]
+        assert equity[dates.index("2026-09-24")] == 101369.07
+        assert equity[dates.index("2026-09-23")] == 100254.0
+
+    def test_jamais_de_samedi_ni_de_dimanche(self):
+        """Des points de week-end (lendemains de samedi ou de dimanche) ne
+        sont pas des clotures : ecartes."""
+        brut = {"timestamp": [_ts_brut(j) for j in ("2026-09-19", "2026-09-20",
+                                                    "2026-09-21", "2026-09-22")],
+                "equity": [1.0, 2.0, 3.0, 4.0]}
+        assert serie_historique(brut) == (["2026-09-18", "2026-09-21"], [1.0, 4.0])
 
     def test_deux_points_le_meme_jour_on_garde_le_dernier(self):
-        brut = {"timestamp": [_ts("2026-09-15", 4), _ts("2026-09-15", 14)],
+        brut = {"timestamp": [_ts("2026-09-15", 0), _ts("2026-09-15", 4)],
                 "equity": [100.0, 101.0]}
         assert serie_historique(brut) == (["2026-09-15"], [101.0])
 
@@ -132,6 +170,33 @@ class TestPerteDuJour:
     def test_sans_etat_du_defi_on_part_du_premier_point(self, cfg, panneau, jours):
         h = _ops(cfg, panneau, FauxCourtier(jours[:2], [50000.0, 49000.0])).historique()
         assert h["perte_jour"][1] == pytest.approx(-0.02)
+
+
+# ---------------------------------------------------------------------------
+class TestDebutDuDefi:
+    def test_on_part_de_la_derniere_seance_en_liquidites(self, cfg, panneau, jours,
+                                                         etat_isole):
+        """Compte ouvert le 14, premiers achats le 17 : rebaser l'indice au 14
+        lui donnait des seances de hausse que le compte ne pouvait pas suivre
+        (+0,8 pt pour SPY sur le graphique du 26/09/2026)."""
+        defi.ecrire_etat({"capital_depart": 1e5, "plus_haut": 1e5})
+        valeurs = [1e5, 1e5, 1e5, 100500.0, 101000.0, 100800.0]
+        h = _ops(cfg, panneau, FauxCourtier(jours, valeurs)).historique()
+        assert h["dates"] == jours[2:]
+        assert h["equity"] == valeurs[2:]
+        assert h["indice"][0] == 502.0, "cloture du 16, derniere seance en liquidites"
+        assert h["perte_jour"][0] is None
+        assert h["perte_jour"][1] == pytest.approx(0.005)
+
+    def test_un_compte_encore_en_liquidites_reste_entier(self, cfg, panneau, jours):
+        h = _ops(cfg, panneau, FauxCourtier(jours, [1e5] * 6)).historique()
+        assert h["dates"] == jours
+
+    def test_un_compte_qui_bouge_des_le_premier_jour_n_est_pas_coupe(self, cfg, panneau,
+                                                                      jours):
+        valeurs = [1e5, 101000.0, 100500.0, 100000.0, 99000.0, 99500.0]
+        h = _ops(cfg, panneau, FauxCourtier(jours, valeurs)).historique()
+        assert h["dates"] == jours
 
 
 # ---------------------------------------------------------------------------
