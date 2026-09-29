@@ -174,6 +174,70 @@ def _neutralise(etat):
     return etat
 
 
+class TestAchatACredit:
+    """Le plan dimensionne au marche mais mesure au cache. Le 29/09/2026, un
+    jour ou le marche depassait la derniere cloture, il 'depensait' l'ecart
+    (185,85 $) et le controle bloquait tout reequilibrage - soit n'importe quel
+    jour de hausse, un sur deux."""
+
+    @pytest.fixture
+    def cfg_sans_plafond(self, cfg_ops):
+        # Sans plafond par ordre ni par ligne, les achats valent exactement
+        # l'equity : le scenario reproduit l'ecart au dollar pres.
+        return cfg_ops.with_overrides({"broker.max_order_pct": 1.0,
+                                       "portfolio.max_weight": 1.0})
+
+    def _hors_cible(self, cfg, panneau):
+        etat = _ops(cfg, panneau, FauxApi()).etat()        # compte en liquidites
+        cibles = {o["ticker"] for o in etat["ordres"] if o["sens"] == "buy"}
+        return sorted({"T%02d" % i for i in range(12)} - cibles)[0]
+
+    def test_un_jour_de_hausse_n_est_pas_un_achat_a_credit(self, cfg_sans_plafond,
+                                                           panneau):
+        ligne = self._hors_cible(cfg_sans_plafond, panneau)
+        # 1 000 titres a 100 au cache ; le marche est 0,5 % plus haut.
+        api = FauxApi(positions={ligne: 1000.0}, marche={ligne: 100500.0},
+                      cash=0.0, equity=100500.0)
+        etat = _ops(cfg_sans_plafond, panneau, api).etat()
+        besoin = etat["resume"]["achats"] - etat["resume"]["ventes"]
+        assert besoin == pytest.approx(500.0, abs=1.0), \
+            "le scenario doit reproduire l'ecart de valorisation, sinon il ne teste rien"
+        c = _controle(etat, "Aucun achat a credit")
+        assert c["ok"] is True, c["detail"]
+        assert "tolere" in c["detail"]
+
+    def test_un_vrai_depassement_reste_bloque_meme_un_jour_de_hausse(
+            self, cfg_sans_plafond, panneau):
+        """Le courtier annonce 10 000 $ de plus que positions et liquidites
+        reunies : le plan achete au-dela du compte. Ca, c'est du credit."""
+        ligne = self._hors_cible(cfg_sans_plafond, panneau)
+        api = FauxApi(positions={ligne: 1000.0}, marche={ligne: 100500.0},
+                      cash=0.0, equity=110500.0)
+        etat = _ops(cfg_sans_plafond, panneau, api).etat()
+        c = _controle(etat, "Aucun achat a credit")
+        assert c["ok"] is False
+        assert "il manque" in c["detail"]
+
+    def test_un_jour_de_baisse_passe_comme_avant(self, cfg_sans_plafond, panneau):
+        ligne = self._hors_cible(cfg_sans_plafond, panneau)
+        api = FauxApi(positions={ligne: 1000.0}, marche={ligne: 99500.0},
+                      cash=0.0, equity=99500.0)
+        etat = _ops(cfg_sans_plafond, panneau, api).etat()
+        assert _controle(etat, "Aucun achat a credit")["ok"] is True
+
+    def test_un_jour_de_baisse_n_est_pas_plus_severe_qu_avant(self, cfg_sans_plafond,
+                                                              panneau):
+        """La correction ne retire l'ecart que les jours de HAUSSE. Un jour de
+        baisse, le controle reste exactement l'ancien : un leger depassement
+        (300 $ ici) couvert par la baisse du jour passe, comme avant. La
+        correction ne doit bloquer aucun reequilibrage qui passait."""
+        ligne = self._hors_cible(cfg_sans_plafond, panneau)
+        api = FauxApi(positions={ligne: 1000.0}, marche={ligne: 99500.0},
+                      cash=0.0, equity=99800.0)
+        etat = _ops(cfg_sans_plafond, panneau, api).etat()
+        assert _controle(etat, "Aucun achat a credit")["ok"] is True
+
+
 class TestDecouvert:
     def test_un_solde_negatif_est_signale(self, cfg_ops, panneau):
         etat = _ops(cfg_ops, panneau, FauxApi(cash=-2245.0)).etat()

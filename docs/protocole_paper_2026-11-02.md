@@ -116,3 +116,4 @@ python scripts/releve_quotidien.py --historique
 |---|---|---|
 | 21/09 | rebalancement du lundi manqué : aucun passage du robot ce jour-là dans `robot_sortie.log` | à élucider avant le 2 novembre |
 | 23/09 | sortie de HUM refusée (HTTP 403) : quantité arrondie AU-DESSUS du détenu (20,123907 pour 20,123906515) ; les achats sont partis sans le produit de cette vente (~7 490 $) | corrigé le 24/09 (`orders.py` tronque les ventes) ; HUM reste en portefeuille jusqu'au prochain rebalancement ; vérifier les liquidités |
+| 29/09 | rééquilibrage bloqué par « Aucun achat à crédit : il manque 185,85 » alors que le plan RÉDUISAIT le découvert : le contrôle comptait comme du crédit l'écart entre le cours du marché et la dernière clôture, donc bloquait n'importe quel jour de hausse | corrigé le 29/09 (`operations.py`) : l'écart de valorisation n'est plus compté comme du crédit, un ordre minimal est toléré |

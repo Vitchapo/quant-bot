@@ -565,6 +565,19 @@ class Operations:
         # -- controles, dans l'ordre ou trade.py les applique ---------------
         plafond = float(self.cfg.get("broker.max_echange_par_seance", 2.0))
         besoin_marge = resume["achats"] - resume["ventes"] - liquidites
+        # Le plan dimensionne les cibles sur l'equity du COURTIER (au marche)
+        # mais mesure les positions au cours du CACHE. Quand le marche est
+        # au-dessus de la derniere cloture, il "depense" mecaniquement cet
+        # ecart : liquidites apres le plan = valeur_cache - valeur_marche, aux
+        # seuils pres. Le 29/09/2026, le controle bloquait ainsi le
+        # reequilibrage pour 185,85 $ sur un compte de 101 000 $ - ce qui
+        # arrive n'importe quel jour de hausse. Un achat a credit, c'est un
+        # plan qui depasse le compte, pas le mouvement du jour : l'ecart de
+        # valorisation est retire (il est deja plafonne a 2 % par le controle
+        # "Valorisation coherente"), et un ordre minimal est tolere pour les
+        # arrondis et les seuils.
+        exces_credit = besoin_marge - max(0.0, valeur_marche - valeur_cache)
+        tolerance_credit = max(seuil, 0.01)
         controles = [
             {"nom": "Donnees a jour",
              # En seances, pas en jours : 0 signifie "rien ne manque". Le
@@ -604,8 +617,10 @@ class Operations:
              "ok": liquidites >= -0.01,
              "detail": "liquidites %.2f" % liquidites},
             {"nom": "Aucun achat a credit",
-             "ok": besoin_marge <= 0.01,
+             "ok": exces_credit <= tolerance_credit,
              "detail": "liquidites suffisantes" if besoin_marge <= 0.01
+                       else ("%.2f d'ecart de valorisation du jour, tolere" % besoin_marge)
+                       if exces_credit <= tolerance_credit
                        else "il manque %.2f" % besoin_marge},
             {"nom": "Valorisation coherente",
              "ok": ecart_valo <= 0.02 or not detail,
