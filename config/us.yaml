@@ -201,7 +201,11 @@ defi:
   perte_jour_max: 0.04      # le contrat dit 5 % : on garde un point de marge
   perte_totale_max: 0.08    # le contrat dit 10 %
   reference: statique       # statique (depuis le depart) | glissante (depuis le plus haut)
-  objectif: 0.08            # cible de la phase 1 ; 0.05 en phase 2
+  # Atteindre l'objectif pose le verrou et SOLDE tout le portefeuille : ce
+  # n'est pas un affichage. 0.08 etait la cible de FundedNext ; le defi vise
+  # est le FTMO 2-Step (docs/protocole_defi_ftmo.md), meme valeur que
+  # config/ftmo.yaml - un test le verifie.
+  objectif: 0.10            # FTMO : 10 % en phase 1 ; 0.05 en phase 2
 
   # Solder les positions a la pose du verrou.
   #

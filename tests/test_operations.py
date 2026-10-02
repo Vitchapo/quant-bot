@@ -533,6 +533,21 @@ class TestGardeFousDuDefi:
         assert base_config.get("defi.perte_jour_max") < 0.05
         assert base_config.get("defi.perte_totale_max") < 0.10
 
+    def test_le_compte_papier_repete_le_defi_ftmo(self, base_config):
+        """Le papier repete le defi qu'on paiera : memes limites, meme objectif.
+
+        Il visait 8 % - la cible de FundedNext - alors que FTMO demande 10 %
+        en phase 1. Or atteindre l'objectif pose le verrou et solde tout : le
+        papier se serait arrete, portefeuille vendu, au mauvais niveau.
+        Constate le 2 octobre 2026.
+        """
+        from pathlib import Path
+        from quantbot.config import Config
+        ftmo = Config.load(Path(__file__).resolve().parent.parent / "config" / "ftmo.yaml")
+        for cle in ("objectif", "perte_jour_max", "perte_totale_max", "reference",
+                    "solder_sur_verrou"):
+            assert base_config.get("defi." + cle) == ftmo.get("defi." + cle), cle
+
     def test_present_et_vert_sur_un_compte_sain(self, cfg_ops, panneau, tmp_path,
                                                 monkeypatch):
         from quantbot import defi
