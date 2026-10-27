@@ -788,6 +788,32 @@ class TestVerrouEtLiquidation:
         rapport = _ops(self._cfg(cfg_ops), panneau, api).solder()
         assert api.envoyes == [] and rapport["ignores"]
 
+    def test_solder_ne_demande_jamais_plus_que_le_detenu(self, cfg_ops, panneau):
+        """Le 19/10, 11 ventes sur 20 ont ete refusees par Alpaca (HTTP 403) :
+        la quantite etait ARRONDIE au millionieme le plus proche, donc parfois
+        au-dessus du detenu. `FauxApi` acceptait tout, d'ou un chemin vert en
+        test et rouge chez le courtier. Ce faux-la refuse comme Alpaca."""
+        class CourtierStrict(FauxApi):
+            def __init__(self, **kw):
+                super().__init__(**kw)
+                self.quantites = {}
+
+            def envoyer_ordre(self, ticker, sens, quantite=None, montant=None, **kw):
+                if sens == "sell" and quantite > self._positions[ticker]:
+                    raise RuntimeError("POST /v2/orders -> HTTP 403 : insufficient qty")
+                self.quantites[ticker] = quantite
+                return super().envoyer_ordre(ticker, sens, quantite, montant, **kw)
+
+        detenu = {"AMD": 8.280818767, "VLO": 20.982734771, "PSX": 36.68361403,
+                  "CNC": 0.000000965}
+        api = CourtierStrict(positions=detenu, marche={t: 100.0 for t in detenu})
+        rapport = _ops(self._cfg(cfg_ops), panneau, api).solder()
+        assert rapport["echecs"] == [], rapport["echecs"]
+        assert sorted(api.quantites) == ["AMD", "PSX", "VLO"]
+        for t, q in api.quantites.items():
+            assert detenu[t] - 1e-6 < q <= detenu[t]
+        assert [i["ticker"] for i in rapport["ignores"]] == ["CNC"]
+
     def test_une_breche_declenche_la_liquidation(self, cfg_ops, panneau):
         api = FauxApi(equity=91_000.0, veille=100_000.0,
                       positions={"T01": 50.0}, marche={"T01": 45_000.0})

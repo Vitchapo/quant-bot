@@ -219,6 +219,12 @@ body[data-niveau="complet"] .hint-simple { display: none; }
 .card h3 .num { color: var(--muted); font-weight: 400; margin-right: 7px; }
 .regarder { font-size: 13px; color: var(--ink); margin: 0 0 6px; }
 .regarder b { font-weight: 600; }
+.badge.version { cursor: help; font-variant-numeric: tabular-nums; }
+.badge.version.alerte { border-color: var(--warning); color: var(--ink); background: rgba(250, 178, 25, .14); }
+.version-ligne { font-size: 12.5px; color: var(--ink-2); margin: -8px 0 14px; line-height: 1.55; }
+.version-ligne b { font-weight: 600; color: var(--ink); font-variant-numeric: tabular-nums; }
+.version-ligne .alerte { display: inline-block; color: var(--ink); background: rgba(250, 178, 25, .18);
+  border-radius: 4px; padding: 0 6px; margin: 2px 4px 0 0; }
 details.plus { margin: 0 0 14px; }
 details.plus > summary { cursor: pointer; font-size: 12.5px; color: var(--series-1); list-style: none; }
 details.plus > summary::-webkit-details-marker { display: none; }
@@ -1010,9 +1016,10 @@ function drawDefi(cv, tip, D, croix) {
     if (D.indiceNom) L.push({ nom: D.indiceNom, couleur: cI,
                               valeur: propre(D.indice[i]) ? fmtSigned(D.indice[i], 2) : "pas de cloture" });
     if (D.actif) {
-      L.push({ nom: "jusqu'a l'objectif", valeur: pts(D.objectif - D.compte[i]) });
-      L.push({ nom: "marge avant le garde-fou", valeur: pts(D.compte[i] - D.plancherBot[i]) });
-      L.push({ nom: "marge avant le contrat", valeur: pts(D.compte[i] - D.plancherContrat[i]) });
+      const enArgent = function (x) { return pts(x) + " · " + argent(x * D.depart, D.devise); };
+      L.push({ nom: "jusqu'a l'objectif", valeur: enArgent(D.objectif - D.compte[i]) });
+      L.push({ nom: "marge avant le garde-fou", valeur: enArgent(D.compte[i] - D.plancherBot[i]) });
+      L.push({ nom: "marge avant le contrat", valeur: enArgent(D.compte[i] - D.plancherContrat[i]) });
     }
     tipRemplir(tip, jourLong(D.dates[i]), L);
     tipPoser(tip, S, tx(i), ev.clientY - r.top);
@@ -1143,7 +1150,7 @@ function drawHalteres(cv, tip, L, survolee) {
 // Gain latent par ligne : barres divergentes autour de zero
 // ---------------------------------------------------------------------------
 function drawLatent(cv, tip, L, dev, survolee) {
-  const H = 21, padT = 4, padB = 6, padL = 62, padR = 86;
+  const H = 21, padT = 4, padB = 6, padL = 62, padR = 136;
   const S = surface(cv, padT + L.length * H + padB), ctx = S.ctx;
   if (!L.length) return;
   const x0 = padL, x1 = S.w - padR;
@@ -1160,7 +1167,9 @@ function drawLatent(cv, tip, L, dev, survolee) {
     ctx.fillStyle = r.latent >= 0 ? cP : cN;
     barreH(ctx, y - 6, 12, tx(0), tx(r.latent));
     ctx.fillStyle = cssVar("--ink-2"); ctx.textAlign = "right";
-    ctx.fillText(argent(r.latent, dev), S.w - 6, y);
+    const coutL = r.valeur - r.latent;
+    ctx.fillText(argent(r.latent, dev) + (coutL > 0 ? "  " + fmtSigned(r.latent / coutL, 1) : ""),
+                 S.w - 6, y);
   }
   const z = Math.round(tx(0)) + 0.5;
   ctx.strokeStyle = cssVar("--axis"); ctx.lineWidth = 1;
@@ -1821,7 +1830,8 @@ function renderOps(d) {
   poser(el("ops-tuiles"),
     tuile("Valeur du compte", devise(c.equity, dev), "compte " + c.numero) +
     tuile("Liquidites", devise(c.liquidites, dev),
-          d.marche_ouvert ? "marche ouvert" : "marche ferme") +
+          (c.equity > 0 ? partPct(c.liquidites / c.equity) + " du compte · " : "") +
+          (d.marche_ouvert ? "marche ouvert" : "marche ferme")) +
     tuile("Positions", String(d.positions.length),
           "cible : " + d.cible.length + " ligne(s)") +
     tuile("Ordres a passer", String(d.ordres.length),
@@ -1867,6 +1877,7 @@ function renderOps(d) {
 
   poserTexte(el("meta"), d.donnees.derniere_cloture + " · " + d.regime.texte);
   renderPortefeuilleGraphes(d);
+  renderArgent();
 }
 
 // ---------------------------------------------------------------------------
@@ -1908,6 +1919,7 @@ function deriverDefi(h) {
 
 function renderDefi(h) {
   opsHisto = h;
+  renderArgent();
   const msg = el("ops-defi-msg"), corps = el("ops-defi-corps");
   if (!h || !h.ok || !h.dates || !h.dates.length) {
     corps.hidden = true; msg.className = "msg";
@@ -1930,8 +1942,11 @@ function renderDefi(h) {
     jourCourt(D.dates[iPire]) + (D.actif ? ", limite " + fmtSigned(-D.perteJourMax, 0) : ""));
   poser(el("ops-defi-tuiles"), D.actif
     ? tuile("Progression", fmtSigned(fin, 2), "objectif " + fmtSigned(D.objectif, 0)) +
-      tuile("Reste a faire", pts(Math.max(0, D.objectif - fin)), "jusqu'a l'objectif") +
-      tuile("Marge", pts(fin - D.plancherBot[n - 1]), "avant le garde-fou (" + fmtSigned(D.plancherBot[n - 1], 0) + ")") +
+      tuile("Reste a faire", pts(Math.max(0, D.objectif - fin)),
+            "jusqu'a l'objectif, soit " + montant(Math.max(0, D.objectif - fin) * D.depart, D.devise)) +
+      tuile("Marge", pts(fin - D.plancherBot[n - 1]), "avant le garde-fou (" +
+            fmtSigned(D.plancherBot[n - 1], 0) + "), soit " +
+            montant((fin - D.plancherBot[n - 1]) * D.depart, D.devise)) +
       tPire
     : tuile("Depuis le depart", fmtSigned(fin, 2), n + " seance(s)") +
       tuile("Valeur", montant(D.equity[n - 1], D.devise), "depart " + montant(D.depart, D.devise)) + tPire);
@@ -1959,7 +1974,10 @@ function renderPortefeuilleGraphes(d) {
   const L = Object.keys(Object.assign({}, vise, detenu)).map(function (t) {
     return { ticker: t, vise: vise[t] || 0, detenu: detenu[t] || 0 }; });
   L.sort(function (a, b) { return (b.vise - a.vise) || (b.detenu - a.detenu); });
-  const P = d.positions.map(function (p) { return { ticker: p.ticker, latent: p.latent, valeur: p.valeur }; })
+  // Les poussieres (moins de 1 $, reliquats de ventes fractionnaires) ne
+  // disent rien et noyaient les vraies lignes sous des "0 $".
+  const P = d.positions.filter(function (p) { return propre(p.valeur) && Math.abs(p.valeur) >= 1; })
+    .map(function (p) { return { ticker: p.ticker, latent: p.latent, valeur: p.valeur }; })
     .sort(function (a, b) { return b.latent - a.latent; });
   // Les DEUX blocs sont demasques avant le premier dessin. Ils partagent une
   // grille : dessine seul, le premier mesurait toute la largeur de la ligne,
@@ -1969,6 +1987,253 @@ function renderPortefeuilleGraphes(d) {
   el("ops-latent-bloc").hidden = !P.length;
   if (L.length) drawHalteres(el("cv-halteres"), el("tip-halteres"), L);
   if (P.length) drawLatent(el("cv-latent"), el("tip-latent"), P, d.compte.devise);
+}
+
+// ---------------------------------------------------------------------------
+// Ou est l'argent : la part investie, aujourd'hui et seance par seance
+// ---------------------------------------------------------------------------
+// Un montant seul se lit mal : 44 628 $ investis, est-ce beaucoup ? Rapporte a
+// la valeur du compte, il devient une part. Les graphiques montrent la part,
+// l'infobulle garde le montant.
+function echapper(s) {
+  return String(s).replace(/[&<>"']/g, function (c) {
+    return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+  });
+}
+// Une part a 0 % s'ecrit 0 %, pas -0 % : un arrondi n'a pas de signe a montrer.
+function partPct(x, dec) {
+  const d = dec === undefined ? 0 : dec;
+  return fmtPct(propre(x) && Math.abs(x) < 0.5 * Math.pow(10, -d - 2) ? 0 : x, d);
+}
+function repartition(d) {
+  const c = d.compte, P = [];
+  for (const p of d.positions) if (propre(p.valeur) && p.valeur > 0.5)
+    P.push({ nom: p.ticker, valeur: p.valeur, latent: p.latent });
+  P.sort(function (a, b) { return b.valeur - a.valeur; });
+  const investi = P.reduce(function (s, p) { return s + p.valeur; }, 0);
+  const segs = (c.liquidites > 0.5 ? [{ nom: "liquidites", valeur: c.liquidites, caisse: true }] : []).concat(P);
+  return { segs: segs, lignes: P, investi: investi, liquidites: c.liquidites,
+           equity: c.equity, devise: c.devise };
+}
+// Une seule barre = la valeur du compte. Liquidites d'abord, puis les lignes de
+// la plus grosse a la plus petite ; deux bleus alternes pour separer les lignes.
+function drawRepartition(cv, tip, R, survole) {
+  const S = surface(cv, 84), ctx = S.ctx;
+  const x0 = 2, x1 = S.w - 2, y = 8, h = 36;
+  const total = Math.max(R.equity, R.investi + Math.max(0, R.liquidites));
+  if (!(total > 0) || !(R.equity > 0)) return;
+  const tx = function (v) { return x0 + v / total * (x1 - x0); };
+  // hexRgb rend des composantes 0-1 ; rgbCss et encreSur attendent 0-255.
+  const rgb = function (hex) { return hexRgb(hex).map(function (v) { return Math.round(255 * v); }); };
+  const bleu = rgb(cssVar("--series-1")), fond = rgb(cssVar("--surface"));
+  const clair = bleu.map(function (v, k) { return Math.round(0.62 * v + 0.38 * fond[k]); });
+  const gris = rgb(cssVar("--muted")).map(function (v, k) { return Math.round(0.4 * v + 0.6 * fond[k]); });
+  const bornes = [];
+  let cum = 0;
+  for (let k = 0; k < R.segs.length; k++) {
+    const s = R.segs[k], a = tx(cum), b = tx(cum + s.valeur);
+    const coul = s.caisse ? gris : (k % 2 ? clair : bleu);
+    ctx.fillStyle = rgbCss(coul);
+    ctx.fillRect(a, y, Math.max(0, b - a), h);
+    if (survole === k) { ctx.strokeStyle = cssVar("--ink"); ctx.lineWidth = 2; ctx.strokeRect(a + 1, y + 1, Math.max(0, b - a - 2), h - 2); }
+    const part = s.valeur / R.equity;
+    const texte = s.nom + " " + fmtNum(100 * part, part < 0.1 ? 1 : 0) + NB + "%";
+    if (b - a > ctx.measureText(texte).width + 10) {
+      ctx.fillStyle = encreSur(coul); ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.fillText(texte, (a + b) / 2, y + h / 2);
+    } else if (b - a > ctx.measureText(s.nom).width + 8) {
+      ctx.fillStyle = encreSur(coul); ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.fillText(s.nom, (a + b) / 2, y + h / 2);
+    }
+    bornes.push([a, b]); cum += s.valeur;
+    ctx.strokeStyle = cssVar("--surface"); ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(Math.round(b) + 0.5, y); ctx.lineTo(Math.round(b) + 0.5, y + h); ctx.stroke();
+  }
+  ctx.fillStyle = cssVar("--muted"); ctx.textBaseline = "top"; ctx.strokeStyle = cssVar("--axis"); ctx.lineWidth = 1;
+  for (const p of [0, 0.25, 0.5, 0.75, 1]) {
+    const X = Math.round(tx(p * R.equity)) + 0.5;
+    ctx.beginPath(); ctx.moveTo(X, y + h); ctx.lineTo(X, y + h + 4); ctx.stroke();
+    ctx.textAlign = p === 0 ? "left" : (p === 1 && total <= R.equity * 1.0001 ? "right" : "center");
+    ctx.fillText(fmtNum(100 * p, 0) + NB + "%", X, y + h + 7);
+  }
+  if (!tip) return;
+  const quitter = function () { tipCacher(tip); drawRepartition(cv, null, R, -1); };
+  const survol = function (ev) {
+    const r = cv.getBoundingClientRect(), px = ev.clientX - r.left;
+    let k = -1;
+    for (let j = 0; j < bornes.length; j++) if (px >= bornes[j][0] && px <= bornes[j][1]) { k = j; break; }
+    if (k < 0) { quitter(); return; }
+    drawRepartition(cv, null, R, k);
+    const s = R.segs[k], L = [{ nom: "part du compte", valeur: partPct(s.valeur / R.equity, 1) },
+                              { nom: "montant", valeur: montant(s.valeur, R.devise) }];
+    if (!s.caisse && propre(s.latent)) {
+      const cout = s.valeur - s.latent;
+      L.push({ nom: "gain latent", valeur: argent(s.latent, R.devise) +
+               (cout > 0 ? " · " + fmtSigned(s.latent / cout, 1) : "") });
+    }
+    tipRemplir(tip, s.caisse ? "liquidites" : s.nom, L);
+    tipPoser(tip, S, px, ev.clientY - r.top);
+  };
+  cv.onmousemove = survol; cv.onmouseleave = quitter; cv.onpointerdown = survol;
+}
+function deriverExpo(h) {
+  if (!h || !h.ok || !h.dates || !h.dates.length || !h.liquidites) return null;
+  const investi = [], parts = [];
+  let vus = 0;
+  for (let i = 0; i < h.dates.length; i++) {
+    const e = h.equity[i], c = h.liquidites[i];
+    if (propre(e) && e > 0 && propre(c)) { investi.push((e - c) / e); parts.push(c / e); vus++; }
+    else { investi.push(null); parts.push(null); }
+  }
+  if (!vus) return null;
+  return { dates: h.dates, equity: h.equity, liquidites: h.liquidites, investi: investi,
+           parts: parts, devise: opsEtatCourant && opsEtatCourant.compte ? opsEtatCourant.compte.devise : "USD" };
+}
+// Memes marges et memes tranches de seance que le graphique du defi : un
+// decrochage de la part investie tombe a l'aplomb de la courbe du compte.
+function drawExpo(cv, tip, E, croix) {
+  const S = surface(cv, 210), ctx = S.ctx, n = E.dates.length;
+  if (!n) return;
+  const G = geoSeances(S, n, 52, 128, 12, 26);
+  const x0 = G.x0, x1 = G.x1, y0 = G.y0, y1 = G.y1, tx = G.tx;
+  let lo = 0, hi = 1;
+  for (const v of E.investi) if (propre(v)) { lo = Math.min(lo, v); hi = Math.max(hi, v); }
+  hi += 0.06;
+  const ty = function (v) { return y1 - (v - lo) / (hi - lo) * (y1 - y0); };
+  axeY(ctx, lo, hi, ty, x0, x1, y0, y1, function (t) { return fmtNum(100 * t, 0) + NB + "%"; });
+  axeSeances(ctx, E.dates, tx, y0, y1, x1);
+  const c1 = cssVar("--series-1"), cM = cssVar("--muted");
+  seuil(ctx, [x0, x1], [ty(1), ty(1)], cM);
+  const labels = [{ y: ty(1), texte: "100 % investi", couleur: cM, seuil: true }];
+  // Aire sous la courbe, par morceaux continus : un soir sans releve est un trou.
+  let i = 0;
+  while (i < n) {
+    if (!propre(E.investi[i])) { i++; continue; }
+    let j = i;
+    while (j + 1 < n && propre(E.investi[j + 1])) j++;
+    ctx.save(); ctx.globalAlpha = 0.14; ctx.fillStyle = c1; ctx.beginPath();
+    ctx.moveTo(tx(i), ty(0));
+    for (let k = i; k <= j; k++) ctx.lineTo(tx(k), ty(E.investi[k]));
+    ctx.lineTo(tx(j), ty(0)); ctx.closePath(); ctx.fill(); ctx.restore();
+    ctx.strokeStyle = c1; ctx.lineWidth = 2; ctx.lineJoin = "round"; ctx.beginPath();
+    for (let k = i; k <= j; k++) { if (k === i) ctx.moveTo(tx(k), ty(E.investi[k])); else ctx.lineTo(tx(k), ty(E.investi[k])); }
+    ctx.stroke();
+    if (i === j) point(ctx, tx(i), ty(E.investi[i]), c1);
+    i = j + 1;
+  }
+  for (let k = n - 1; k >= 0; k--) if (propre(E.investi[k])) {
+    point(ctx, tx(k), ty(E.investi[k]), c1);
+    labels.push({ y: ty(E.investi[k]), texte: "investi " + fmtNum(100 * E.investi[k], 0) + NB + "%",
+                  couleur: c1, fort: true });
+    break;
+  }
+  etiquettesDroite(ctx, labels, x1, y0, y1);
+  if (croix !== undefined && croix >= 0) {
+    const X = Math.round(tx(croix)) + 0.5;
+    ctx.strokeStyle = cssVar("--axis"); ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(X, y0); ctx.lineTo(X, y1); ctx.stroke();
+    if (propre(E.investi[croix])) point(ctx, tx(croix), ty(E.investi[croix]), c1);
+  }
+  if (!tip) return;
+  const quitter = function () { tipCacher(tip); drawExpo(cv, null, E, -1); };
+  const survol = function (ev) {
+    const r = cv.getBoundingClientRect(), px = ev.clientX - r.left;
+    if (px < x0 - 6 || px > x1 + 6) { quitter(); return; }
+    const k = Math.max(0, Math.min(n - 1, Math.floor((px - x0) / G.pas)));
+    drawExpo(cv, null, E, k);
+    const L = propre(E.investi[k])
+      ? [{ nom: "investi", couleur: c1, valeur: partPct(E.investi[k]) + " · " + montant(E.equity[k] - E.liquidites[k], E.devise) },
+         { nom: "liquidites", valeur: partPct(E.parts[k]) + " · " + montant(E.liquidites[k], E.devise) },
+         { nom: "valeur du compte", valeur: montant(E.equity[k], E.devise) }]
+      : [{ nom: "releve", valeur: "aucun ce soir-la" }];
+    tipRemplir(tip, jourLong(E.dates[k]), L);
+    tipPoser(tip, S, tx(k), ev.clientY - r.top);
+  };
+  cv.onmousemove = survol; cv.onmouseleave = quitter; cv.onpointerdown = survol;
+}
+function renderArgent() {
+  const d = opsEtatCourant, bloc = el("ops-argent");
+  if (!bloc) return;
+  if (!d || !d.connecte || !(d.compte.equity > 0)) { bloc.hidden = true; return; }
+  bloc.hidden = false;
+  const R = repartition(d), dev = R.devise, eq = R.equity;
+  const f = opsHisto && opsHisto.defi ? opsHisto.defi : null, depart = f && f.depart ? f.depart : null;
+  const grosse = R.lignes[0];
+  poser(el("ops-argent-tuiles"),
+    tuile("Investi", partPct(R.investi / eq),
+          montant(R.investi, dev) + " en " + R.lignes.length + " ligne(s)") +
+    tuile("Liquidites", partPct(R.liquidites / eq),
+          montant(R.liquidites, dev) + (R.liquidites < 0 ? " : a credit" : "")) +
+    tuile("Plus grosse ligne", grosse ? fmtPct(grosse.valeur / eq, 1) : "n/a",
+          grosse ? echapper(grosse.nom) + ", " + montant(grosse.valeur, dev) : "aucune ligne") +
+    (depart ? tuile("Depuis le depart", fmtSigned(eq / depart - 1, 2),
+                    argent(eq - depart, dev) + " sur " + montant(depart, dev)) : ""));
+  drawRepartition(el("cv-repartition"), el("tip-repartition"), R);
+  const E = deriverExpo(opsHisto), msg = el("ops-expo-msg"), cv = el("cv-expo");
+  if (!E) {
+    cv.parentElement.hidden = true; msg.className = "msg";
+    poserTexte(msg, opsHisto ? "Pas encore de releve du soir : la part investie apparaitra apres le prochain."
+                             : "Lecture de l'historique...");
+    return;
+  }
+  cv.parentElement.hidden = false; poserTexte(msg, "");
+  drawExpo(cv, el("tip-expo"), E);
+}
+
+// ---------------------------------------------------------------------------
+// Version en service : ou en est le bot, quel code tourne
+// ---------------------------------------------------------------------------
+// Le texte vient de git (sujet du commit, noms de fichiers) : construit noeud
+// par noeud, jamais par innerHTML.
+function quand(iso, avecAnnee) {
+  if (!iso) return "?";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return String(iso);
+  const j = d.toLocaleDateString("fr-FR", avecAnnee ? { day: "2-digit", month: "2-digit", year: "numeric" }
+                                                    : { day: "2-digit", month: "2-digit" });
+  return j + " a " + d.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
+}
+function renderVersion(v) {
+  if (!v || !v.disque) return;
+  const D = v.disque, P = v.processus || {}, badge = el("version"), ligne = el("ops-version");
+  const ajouter = function (parent, texte, gras, classe) {
+    const n = document.createElement(gras ? "b" : "span");
+    if (classe) n.className = classe;
+    n.textContent = texte; parent.appendChild(n);
+  };
+  if (!D.ok) {
+    badge.hidden = false; badge.className = "badge version alerte";
+    badge.textContent = "version inconnue"; badge.title = D.raison || "";
+    if (ligne) { ligne.hidden = false; ligne.textContent = "Version du code illisible : " + (D.raison || "?"); }
+    return;
+  }
+  const alertes = [];
+  if (D.modifs && D.modifs.length)
+    alertes.push("modifie a la main depuis ce commit : " + D.modifs.join(", "));
+  if (P.ok && P.commit && P.commit !== D.commit)
+    alertes.push("le tableau de bord tourne encore sur " + P.commit + " : redemarre-le pour afficher " + D.commit);
+  badge.hidden = false;
+  badge.className = "badge version" + (alertes.length ? " alerte" : "");
+  badge.textContent = "version " + D.commit + " · " + quand(D.installe_le || D.date_commit, false).split(" a ")[0] +
+                      (alertes.length ? " · !" : "");
+  badge.title = "Code en service : " + D.commit + " du " + quand(D.date_commit, true) + "\n" + (D.sujet || "") +
+                "\nInstalle sur cette machine le " + quand(D.installe_le, true) +
+                "\nTableau de bord lance le " + quand(v.demarre_le, true) +
+                (alertes.length ? "\n\n" + alertes.join("\n") : "");
+  if (!ligne) return;
+  while (ligne.firstChild) ligne.removeChild(ligne.firstChild);
+  ajouter(ligne, "Code en service : ");
+  ajouter(ligne, D.commit, true);
+  ajouter(ligne, " du " + quand(D.date_commit, true) + " — « " + (D.sujet || "") + " »");
+  ajouter(ligne, " · installe ici le ");
+  ajouter(ligne, quand(D.installe_le, true), true);
+  ajouter(ligne, " · tableau de bord lance le " + quand(v.demarre_le, true));
+  for (const a of alertes) { ligne.appendChild(document.createElement("br")); ajouter(ligne, "! " + a, false, "alerte"); }
+  ligne.hidden = false;
+}
+function chargerVersion() {
+  if (MODE === "static") return;
+  post("/api/version", {}).then(renderVersion).catch(function () {});
 }
 
 // L'historique ne doit jamais faire echouer le reste de l'ecran : il gere
@@ -1981,6 +2246,7 @@ function opsHistorique() {
 }
 function repeindreOps() {
   if (opsEtatCourant) renderPortefeuilleGraphes(opsEtatCourant);
+  renderArgent();
   if (opsHisto) renderDefi(opsHisto);
 }
 // Un canvas masque a une largeur nulle : on redessine la vue VISIBLE au
@@ -2248,6 +2514,7 @@ function opsBattre() {
   post("/api/ops/pouls", {}).then(function (p) {
     opsEchecs = 0;
     opsDernierSucces = Date.now();
+    if (p.version) renderVersion(p.version);
     opsMajVu();
     opsPastille("actif");
     const change = opsEmpreinte !== null && p.empreinte !== opsEmpreinte;
@@ -2341,6 +2608,7 @@ if (MODE === "static") {
   // travaille sur l'analyse, par une pastille sur l'onglet plutot que par
   // une page qui change sous les yeux.
   opsPlanifier(1500);
+  chargerVersion();
 }
 
 
@@ -2410,6 +2678,7 @@ PAGE = """<!doctype html>
   </span>
   <span class="badge avance">__MODEBADGE__</span>
   <span class="badge">__PERIODE__</span>
+  <span class="badge version" id="version" hidden></span>
   <button id="theme" title="Basculer clair / sombre">Theme</button>
 </header>
 
@@ -2646,6 +2915,7 @@ PAGE = """<!doctype html>
         <div style="flex:1 1 auto">
           <h3>Compte de simulation <span class="badge pastille-mode">aucun argent reel</span></h3>
           <div class="titre" id="ops-titre">Connexion...</div>
+          <div class="version-ligne" id="ops-version" hidden></div>
         </div>
         <div class="auto">
           <span id="ops-pouls" class="pouls" title="Etat de la surveillance"></span>
@@ -2678,6 +2948,21 @@ PAGE = """<!doctype html>
         <div class="plot"><canvas id="cv-jour"></canvas><div class="tip" id="tip-jour"></div></div>
         <details class="tv"><summary>Vue tableau</summary><div id="tv-defi"></div></details>
       </div>
+    </section>
+
+    <section class="card" id="ops-argent" hidden>
+      <h3>Ou est l'argent</h3>
+      <p class="regarder">A regarder : <b>la part investie.</b> Ce qui n'est pas investi dort
+        en liquidites : ca ne rapporte rien, mais ca ne peut rien perdre. Au-dessus de 100 %,
+        le compte achete a credit.</p>
+      <div class="tiles" id="ops-argent-tuiles"></div>
+      <h4>Aujourd'hui, sur 100 du compte</h4>
+      <div class="plot"><canvas id="cv-repartition"></canvas><div class="tip" id="tip-repartition"></div></div>
+      <h4>Part investie, seance par seance</h4>
+      <p class="regarder">D'apres le releve de chaque soir. Memes seances que la courbe du
+        defi : un decrochage ici se lit a l'aplomb de celle du dessus.</p>
+      <div id="ops-expo-msg" class="msg"></div>
+      <div class="plot"><canvas id="cv-expo"></canvas><div class="tip" id="tip-expo"></div></div>
     </section>
 
     <section class="card">

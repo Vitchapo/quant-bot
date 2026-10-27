@@ -28,12 +28,14 @@ import threading
 import time
 import warnings
 import webbrowser
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import _bootstrap  # noqa: F401
 
 from quantbot import datafeed, explore, operations, webui
+from quantbot import version as version_code
 from quantbot.backtest import BenchmarkMissingError
 from quantbot.config import Config
 from quantbot.universe import UniverseError
@@ -144,6 +146,21 @@ def serve(cfg, prices, port, open_browser=True):
 
     ops = operations.Operations(cfg, charger_prix)
 
+    # La version CHARGEE par ce processus, lue une fois : apres une mise a
+    # jour du disque, elle reste l'ancienne tant qu'on ne redemarre pas le
+    # tableau de bord. La version SUR DISQUE est relue (30 s de cache) : c'est
+    # elle qu'utilisent le robot et la veille a leur prochain passage.
+    version_processus = version_code.lire()
+    demarre_le = datetime.now().astimezone().isoformat(timespec="seconds")
+    version_cache = {"t": 0.0, "valeur": None}
+
+    def version():
+        maintenant = time.time()
+        if version_cache["valeur"] is None or maintenant - version_cache["t"] > 30.0:
+            version_cache.update(t=maintenant, valeur=version_code.lire())
+        return {"disque": version_cache["valeur"], "processus": version_processus,
+                "demarre_le": demarre_le}
+
     # Cache du battement. Le navigateur interroge toutes les 15 a 60 secondes,
     # et plusieurs onglets peuvent le faire en meme temps ; sans ce cache,
     # chaque onglet declencherait ses trois appels au courtier. Une seconde de
@@ -173,6 +190,10 @@ def serve(cfg, prices, port, open_browser=True):
             valeur["retard_seances"] = (datafeed.seances_ecoulees(derniere)
                                         if derniere is not None else None)
             valeur["fetch_en_cours"] = rafraichissement.en_cours
+        except Exception:
+            pass
+        try:
+            valeur["version"] = version()
         except Exception:
             pass
         with pouls_verrou:
@@ -253,6 +274,12 @@ def serve(cfg, prices, port, open_browser=True):
                 # moteur pour une minute et demie.
                 self._send(200, json.dumps(historique(), ensure_ascii=False,
                                            allow_nan=False).encode("utf-8"),
+                           "application/json; charset=utf-8")
+                return
+            if self.path == "/api/version":
+                # Sans courtier ni verrou : la pastille de version s'affiche
+                # des le chargement de la page, quel que soit l'onglet.
+                self._send(200, json.dumps(version(), ensure_ascii=False).encode("utf-8"),
                            "application/json; charset=utf-8")
                 return
             if self.path == "/api/ops/statut":

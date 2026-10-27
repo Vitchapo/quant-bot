@@ -276,3 +276,35 @@ class TestAppelCourtier:
         assert vu["methode"] == "GET"
         assert vu["chemin"] == "/v2/account/portfolio/history"
         assert vu["params"] == {"period": "1M", "timeframe": "1D"}
+
+
+# ---------------------------------------------------------------------------
+class TestLiquidites:
+    """Le releve du soir donne les liquidites ; le tableau de bord en tire la
+    part investie, seance par seance, alignee sur les dates du compte."""
+
+    def _releve(self, chemin, lignes):
+        chemin.write_text("date,horodatage,equity,solde,latent\n" + "".join(
+            "%s,%sT22:30:00,0,%s,0\n" % (d, d, s) for d, s in lignes), encoding="utf-8")
+        return chemin
+
+    def test_alignees_aux_dates_du_compte(self, cfg, panneau, jours, tmp_path, monkeypatch):
+        from quantbot import operations
+        chemin = self._releve(tmp_path / "r.csv", [(jours[0], "500.0"), (jours[2], "-170.19"),
+                                                   ("2026-09-19", "999")])   # un samedi
+        monkeypatch.setattr(operations, "RELEVE", chemin)
+        h = _ops(cfg, panneau, FauxCourtier(jours, [1e5] * 6)).historique()
+        assert h["liquidites"] == [500.0, None, -170.19, None, None, None]
+
+    def test_sans_releve_rien_n_est_invente(self, cfg, panneau, jours, tmp_path, monkeypatch):
+        from quantbot import operations
+        monkeypatch.setattr(operations, "RELEVE", tmp_path / "absent.csv")
+        h = _ops(cfg, panneau, FauxCourtier(jours, [1e5] * 6)).historique()
+        assert h["ok"] and h["liquidites"] == [None] * 6
+
+    def test_une_ligne_illisible_fait_un_trou(self, cfg, panneau, jours, tmp_path, monkeypatch):
+        from quantbot import operations
+        chemin = self._releve(tmp_path / "r.csv", [(jours[0], "abc"), (jours[1], "")])
+        monkeypatch.setattr(operations, "RELEVE", chemin)
+        h = _ops(cfg, panneau, FauxCourtier(jours, [1e5] * 6)).historique()
+        assert h["liquidites"][:2] == [None, None]

@@ -24,6 +24,9 @@ from . import broker, defi, executions as exe, live, orders as ord_mod
 
 JOURNAL = Path("data/journal_ordres.csv")
 ETAT_ROBOT = Path("data/robot_etat.json")
+#: Releve de chaque soir (scripts/releve_quotidien.py) : la seule source des
+#: liquidites seance par seance, que l'historique du courtier ne donne pas.
+RELEVE = Path("data/releve_quotidien.csv")
 
 COLONNES = ["horodatage", "compte", "mode", "ticker", "sens", "quantite", "montant",
             "cours", "date_cours", "cours_marche", "fourchette_bps", "motif",
@@ -202,6 +205,29 @@ def journaliser(lignes, chemin=None) -> None:
 RECUL_CLOTURE = 6 * 3600
 
 
+def liquidites_par_date(chemin=None) -> dict:
+    """Les liquidites de chaque soir, lues dans le releve : {date: solde}.
+
+    Le courtier ne donne que la valeur du compte jour par jour. La part
+    investie se deduit du releve, ecrit apres chaque cloture. Fichier absent
+    ou ligne illisible : un trou, jamais un chiffre invente.
+    """
+    chemin = Path(chemin) if chemin else RELEVE
+    out = {}
+    try:
+        with chemin.open(encoding="utf-8", newline="") as fh:
+            for ligne in csv.DictReader(fh):
+                try:
+                    v = float(ligne.get("solde") or "")
+                except ValueError:
+                    continue
+                if math.isfinite(v) and ligne.get("date"):
+                    out[ligne["date"]] = v
+    except OSError:
+        pass
+    return out
+
+
 def serie_historique(brut) -> tuple:
     """Reponse brute du courtier -> (dates 'AAAA-MM-JJ', valeurs du compte).
 
@@ -372,7 +398,7 @@ class Operations:
         balance"), et non a l'equity de la veille.
         """
         out = {"ok": False, "raison": "", "dates": [], "equity": [],
-               "perte_jour": [], "indice": [], "indice_nom": None,
+               "perte_jour": [], "indice": [], "indice_nom": None, "liquidites": [],
                "defi": self._parametres_defi()}
 
         lire = getattr(self.api, "historique", None)
@@ -419,6 +445,10 @@ class Operations:
                           for v in indice]
         except Exception:
             pass
+
+        # Liquidites du soir, aux seules dates releves : pas de report non plus.
+        caisse = liquidites_par_date()
+        out["liquidites"] = [caisse.get(d) for d in dates]
 
         out.update({"ok": True, "dates": dates, "equity": equity,
                     "perte_jour": perte_jour, "indice": indice,
@@ -826,7 +856,11 @@ class Operations:
             # ouverte parce qu'elle est du mauvais signe ne serait pas une
             # liquidation.
             sens = ord_mod.VENTE if titres > 0 else ord_mod.ACHAT
-            quantite = round(abs(titres), 6)
+            # TRONQUER, jamais arrondir : round() peut demander plus que le
+            # detenu (8,280819 pour 8,280818767) et Alpaca refuse la vente
+            # en HTTP 403. C'est ce qui a bloque 11 lignes sur 20 lors de la
+            # liquidation du 19/10, comme la sortie de HUM le 23/09.
+            quantite = ord_mod._tronquer(abs(titres))
             if quantite <= 0:
                 rapport["ignores"].append({"ticker": ticker, "titres": titres,
                                            "raison": "poussiere inferieure a 1e-6"})
