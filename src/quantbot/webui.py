@@ -18,6 +18,11 @@ en vision normale, sur toutes les paires). Le turquoise passe sous 3:1 de
 contraste en theme clair : chaque courbe porte donc une etiquette en bout de
 trace et chaque graphique a une vue tableau, de sorte que la couleur ne porte
 jamais seule l'information.
+
+Le camembert des domaines prend deux creneaux de plus (jaune, magenta) et une
+rampe de trois bleus pour la famille "Tech". Chaque paire qui peut s'y toucher
+- l'anneau boucle sur lui-meme - a ete passee au validateur dans les deux
+themes ; d'ou l'ordre impose des parts (voir `drawDomaines`).
 """
 from __future__ import annotations
 
@@ -294,6 +299,35 @@ button.danger:hover { filter: brightness(1.08); }
   background: transparent; color: var(--ink-2); }
 .bascule button[aria-pressed="true"] { background: var(--series-1); color: #fff; }
 .note-graphe { font-size: 12.5px; color: var(--ink-2); margin: 8px 0 0; max-width: 80ch; }
+
+/* -- camembert des domaines ------------------------------------------------ */
+/* Deux creneaux de plus (jaune, magenta) et la rampe de la famille "Tech" :
+   trois pas d'un meme bleu, du plus fonce au plus clair en theme clair et a
+   l'inverse en sombre - le pas le plus marque reste celui des puces. */
+:root { --series-4: #eda100; --series-5: #e87ba4;
+        --tech-1: #184f95; --tech-2: #2a78d6; --tech-3: #6da7ec; }
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) { --series-4: #c98500; --series-5: #d55181;
+    --tech-1: #86b6ef; --tech-2: #3987e5; --tech-3: #1c5cab; }
+}
+:root[data-theme="dark"] { --series-4: #c98500; --series-5: #d55181;
+  --tech-1: #86b6ef; --tech-2: #3987e5; --tech-3: #1c5cab; }
+.domaines { display: grid; grid-template-columns: 250px minmax(0, 1fr); gap: 8px 28px;
+  align-items: center; margin-top: 4px; }
+@media (max-width: 720px) { .domaines { grid-template-columns: minmax(0, 1fr); } }
+.dom-liste { font-size: 12.5px; max-width: 560px; }
+.dom-famille { color: var(--ink-2); margin: 0 0 2px; }
+.dom-famille b { color: var(--ink); font-weight: 600; margin-right: 8px; }
+.dom-ligne { display: grid; grid-template-columns: 10px minmax(0, 1fr) auto 6.5em; gap: 0 10px;
+  align-items: baseline; padding: 5px 0; border-bottom: 1px solid var(--grid); }
+.dom-ligne:last-child { border-bottom: none; }
+.dom-ligne.membre { padding-left: 12px; }
+.dom-ligne i { width: 10px; height: 10px; border-radius: 2px; align-self: center; }
+.dom-ligne .nom { color: var(--ink); }
+.dom-ligne b { font-weight: 600; font-variant-numeric: tabular-nums; text-align: right; }
+.dom-ligne .m { color: var(--ink-2); font-variant-numeric: tabular-nums; text-align: right; }
+.dom-ligne .tk { grid-column: 2 / -1; color: var(--muted); font-size: 11.5px; line-height: 1.35; }
+.dom-source { font-size: 11.5px; color: var(--muted); margin-top: 8px; max-width: 560px; }
 """
 
 
@@ -1878,6 +1912,8 @@ function renderOps(d) {
   poserTexte(el("meta"), d.donnees.derniere_cloture + " · " + d.regime.texte);
   renderPortefeuilleGraphes(d);
   renderArgent();
+  chargerDomaines(d);
+  renderCapital();
 }
 
 // ---------------------------------------------------------------------------
@@ -1920,6 +1956,7 @@ function deriverDefi(h) {
 function renderDefi(h) {
   opsHisto = h;
   renderArgent();
+  renderCapital();
   const msg = el("ops-defi-msg"), corps = el("ops-defi-corps");
   if (!h || !h.ok || !h.dates || !h.dates.length) {
     corps.hidden = true; msg.className = "msg";
@@ -2005,11 +2042,22 @@ function partPct(x, dec) {
   const d = dec === undefined ? 0 : dec;
   return fmtPct(propre(x) && Math.abs(x) < 0.5 * Math.pow(10, -d - 2) ? 0 : x, d);
 }
-function repartition(d) {
+function repartition(d, Dm) {
   const c = d.compte, P = [];
-  for (const p of d.positions) if (propre(p.valeur) && p.valeur > 0.5)
-    P.push({ nom: p.ticker, valeur: p.valeur, latent: p.latent });
-  P.sort(function (a, b) { return b.valeur - a.valeur; });
+  if (Dm && Dm.nLignes && Dm.nonClasses < Dm.nLignes) {
+    // Lignes groupees par domaine, dans l'ordre et les couleurs du camembert :
+    // une couleur dit la meme chose dans les deux graphiques, et deux parts
+    // voisines forment toujours une paire passee au validateur.
+    const latent = {};
+    for (const p of d.positions) latent[p.ticker] = p.latent;
+    for (const g of Dm.segs) for (const l of g.lignes)
+      P.push({ nom: l.ticker, valeur: l.valeur, latent: latent[l.ticker], couleur: g.couleur,
+               domaine: l.info ? l.info.domaine : NON_CLASSE });
+  } else {
+    for (const p of d.positions) if (propre(p.valeur) && p.valeur > 0.5)
+      P.push({ nom: p.ticker, valeur: p.valeur, latent: p.latent });
+    P.sort(function (a, b) { return b.valeur - a.valeur; });
+  }
   const investi = P.reduce(function (s, p) { return s + p.valeur; }, 0);
   const segs = (c.liquidites > 0.5 ? [{ nom: "liquidites", valeur: c.liquidites, caisse: true }] : []).concat(P);
   return { segs: segs, lignes: P, investi: investi, liquidites: c.liquidites,
@@ -2032,7 +2080,7 @@ function drawRepartition(cv, tip, R, survole) {
   let cum = 0;
   for (let k = 0; k < R.segs.length; k++) {
     const s = R.segs[k], a = tx(cum), b = tx(cum + s.valeur);
-    const coul = s.caisse ? gris : (k % 2 ? clair : bleu);
+    const coul = s.caisse ? gris : s.couleur ? rgb(cssVar(s.couleur)) : (k % 2 ? clair : bleu);
     ctx.fillStyle = rgbCss(coul);
     ctx.fillRect(a, y, Math.max(0, b - a), h);
     if (survole === k) { ctx.strokeStyle = cssVar("--ink"); ctx.lineWidth = 2; ctx.strokeRect(a + 1, y + 1, Math.max(0, b - a - 2), h - 2); }
@@ -2046,8 +2094,10 @@ function drawRepartition(cv, tip, R, survole) {
       ctx.fillText(s.nom, (a + b) / 2, y + h / 2);
     }
     bornes.push([a, b]); cum += s.valeur;
-    ctx.strokeStyle = cssVar("--surface"); ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.moveTo(Math.round(b) + 0.5, y); ctx.lineTo(Math.round(b) + 0.5, y + h); ctx.stroke();
+    // 2 px de surface entre deux lignes : voisines du meme domaine, elles
+    // ont la meme couleur, et seul cet ecart les separe.
+    ctx.strokeStyle = cssVar("--surface"); ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(Math.round(b), y); ctx.lineTo(Math.round(b), y + h); ctx.stroke();
   }
   ctx.fillStyle = cssVar("--muted"); ctx.textBaseline = "top"; ctx.strokeStyle = cssVar("--axis"); ctx.lineWidth = 1;
   for (const p of [0, 0.25, 0.5, 0.75, 1]) {
@@ -2071,7 +2121,7 @@ function drawRepartition(cv, tip, R, survole) {
       L.push({ nom: "gain latent", valeur: argent(s.latent, R.devise) +
                (cout > 0 ? " · " + fmtSigned(s.latent / cout, 1) : "") });
     }
-    tipRemplir(tip, s.caisse ? "liquidites" : s.nom, L);
+    tipRemplir(tip, s.caisse ? "liquidites" : s.nom + (s.domaine ? " · " + s.domaine : ""), L);
     tipPoser(tip, S, px, ev.clientY - r.top);
   };
   cv.onmousemove = survol; cv.onmouseleave = quitter; cv.onpointerdown = survol;
@@ -2156,9 +2206,8 @@ function renderArgent() {
   if (!bloc) return;
   if (!d || !d.connecte || !(d.compte.equity > 0)) { bloc.hidden = true; return; }
   bloc.hidden = false;
-  const R = repartition(d), dev = R.devise, eq = R.equity;
-  const f = opsHisto && opsHisto.defi ? opsHisto.defi : null, depart = f && f.depart ? f.depart : null;
-  const grosse = R.lignes[0];
+  const Dm = domainesDe(d), R = repartition(d, Dm), dev = R.devise, eq = R.equity;
+  const grosse = R.lignes.reduce(function (m, p) { return !m || p.valeur > m.valeur ? p : m; }, null);
   poser(el("ops-argent-tuiles"),
     tuile("Investi", partPct(R.investi / eq),
           montant(R.investi, dev) + " en " + R.lignes.length + " ligne(s)") +
@@ -2166,9 +2215,9 @@ function renderArgent() {
           montant(R.liquidites, dev) + (R.liquidites < 0 ? " : a credit" : "")) +
     tuile("Plus grosse ligne", grosse ? fmtPct(grosse.valeur / eq, 1) : "n/a",
           grosse ? echapper(grosse.nom) + ", " + montant(grosse.valeur, dev) : "aucune ligne") +
-    (depart ? tuile("Depuis le depart", fmtSigned(eq / depart - 1, 2),
-                    argent(eq - depart, dev) + " sur " + montant(depart, dev)) : ""));
+    tuileDomaine(d, Dm));
   drawRepartition(el("cv-repartition"), el("tip-repartition"), R);
+  renderDomaines(d, Dm);
   const E = deriverExpo(opsHisto), msg = el("ops-expo-msg"), cv = el("cv-expo");
   if (!E) {
     cv.parentElement.hidden = true; msg.className = "msg";
@@ -2235,6 +2284,520 @@ function chargerVersion() {
   if (MODE === "static") return;
   post("/api/version", {}).then(renderVersion).catch(function () {});
 }
+
+// ---------------------------------------------------------------------------
+// Par domaine d'activite : de quoi sont faites les lignes
+// ---------------------------------------------------------------------------
+// Le classement vient du serveur (domaines.py : GICS, via la table du S&P 500
+// sur Wikipedia). La tech y est coupee en trois domaines qui forment une
+// famille, dessines dans trois bleus d'une meme rampe : le poids de la famille
+// se lit d'un coup d'oeil. Les autres domaines prennent les creneaux suivants
+// de la palette, par taille decroissante ; au-dela de cinq teintes, le reste
+// est regroupe en gris dans "Autres".
+//
+// L'ordre des parts n'est pas libre : dans un anneau, la derniere part touche
+// la premiere. Les paires orange-jaune et orange-magenta echouent au
+// validateur (moins de 15 en vision normale), et l'orange ouvre la serie des
+// autres domaines quand la tech est la. La tech ouvre donc toujours l'anneau :
+// ses trois bleus passent avec toutes les teintes. Sans tech, la serie
+// commence au bleu, qui passe avec toutes les autres.
+let opsDomaines = null, opsDomainesEssais = 0, opsDomainesTimer = null;
+const MEMBRES_TECH = ["Semi-conducteurs", "Materiel & reseaux", "Logiciels & services"];
+const NON_CLASSE = "Non classe";
+
+function chargerDomaines(d) {
+  if (MODE === "static" || !d || !d.connecte) return;
+  const tickers = [];
+  const ajouter = function (t) { if (t && tickers.indexOf(t) < 0) tickers.push(t); };
+  for (const p of d.positions || []) ajouter(p.ticker);
+  for (const t of d.cible || []) ajouter(t.ticker);
+  clearTimeout(opsDomainesTimer);
+  post("/api/ops/domaines", { tickers: tickers }).then(function (r) {
+    opsDomaines = r;
+    renderArgent();
+    // Telechargement en cours cote serveur : on redemande dans 5 s, six fois
+    // au plus. Au-dela, le prochain rafraichissement du compte s'en charge.
+    if (r && r.en_cours && opsDomainesEssais < 6) {
+      opsDomainesEssais += 1;
+      opsDomainesTimer = setTimeout(function () { chargerDomaines(opsEtatCourant); }, 5000);
+    } else if (!r || !r.en_cours) {
+      opsDomainesEssais = 0;
+    }
+  }).catch(function () {});
+}
+
+function domainesDe(d) {
+  const C = (opsDomaines && opsDomaines.titres) || {}, groupes = {};
+  let investi = 0;
+  for (const p of d.positions || []) {
+    if (!propre(p.valeur) || p.valeur < 0.5) continue;   // les poussieres de ventes ne comptent pas
+    const info = C[p.ticker] || null, nom = info ? info.domaine : NON_CLASSE;
+    const g = groupes[nom] || (groupes[nom] = { nom: nom, valeur: 0, lignes: [] });
+    g.valeur += p.valeur; investi += p.valeur;
+    g.lignes.push({ ticker: p.ticker, valeur: p.valeur, info: info });
+  }
+  const parValeur = function (a, b) { return b.valeur - a.valeur; };
+  for (const k in groupes) groupes[k].lignes.sort(parValeur);
+  const tech = MEMBRES_TECH.filter(function (n) { return groupes[n]; })
+    .map(function (n) { return groupes[n]; });
+  const autres = Object.keys(groupes)
+    .filter(function (n) { return MEMBRES_TECH.indexOf(n) < 0 && n !== NON_CLASSE; })
+    .map(function (n) { return groupes[n]; }).sort(parValeur);
+  const place = tech.length ? 4 : 5, garde = autres.slice(0, place), plis = autres.slice(place);
+  if (groupes[NON_CLASSE]) plis.push(groupes[NON_CLASSE]);
+  const segs = [];
+  for (const g of tech)
+    segs.push(Object.assign({ couleur: "--tech-" + (MEMBRES_TECH.indexOf(g.nom) + 1), tech: true }, g));
+  garde.forEach(function (g, k) {
+    segs.push(Object.assign({ couleur: "--series-" + (k + (tech.length ? 2 : 1)) }, g));
+  });
+  if (plis.length) {
+    const seul = plis.length === 1 && plis[0].nom === NON_CLASSE;
+    segs.push({ nom: seul ? NON_CLASSE : "Autres", couleur: "--muted", plis: plis,
+                valeur: plis.reduce(function (s, g) { return s + g.valeur; }, 0),
+                lignes: [].concat.apply([], plis.map(function (g) { return g.lignes; })).sort(parValeur) });
+  }
+  const techTotal = tech.reduce(function (s, g) { return s + g.valeur; }, 0);
+  // La famille la plus lourde : la tech compte pour UN pari, pas pour trois.
+  const familles = (tech.length ? [{ nom: "Tech", valeur: techTotal,
+                                     n: tech.reduce(function (s, g) { return s + g.lignes.length; }, 0) }] : [])
+    .concat(autres.map(function (g) { return { nom: g.nom, valeur: g.valeur, n: g.lignes.length }; }))
+    .sort(parValeur);
+  return { segs: segs, investi: investi, equity: d.compte.equity, devise: d.compte.devise,
+           tech: tech, techTotal: techTotal, familles: familles,
+           nonClasses: groupes[NON_CLASSE] ? groupes[NON_CLASSE].lignes.length : 0,
+           nLignes: Object.keys(groupes).reduce(function (s, k) { return s + groupes[k].lignes.length; }, 0) };
+}
+
+function rgb255(hex) { return hexRgb(hex).map(function (v) { return Math.round(255 * v); }); }
+
+// L'anneau : parts en % des lignes investies, la tech a midi, sens horaire.
+function drawDomaines(cv, tip, Dm, survole) {
+  const S = surface(cv, 236), ctx = S.ctx;
+  const total = Dm.segs.reduce(function (s, g) { return s + g.valeur; }, 0);
+  if (!(total > 0)) return;
+  const cx = S.w / 2, cy = S.h / 2, R = Math.min(S.w / 2, S.h / 2) - 10, r = R * 0.6;
+  const bornes = [];
+  let a = -Math.PI / 2;
+  for (let k = 0; k < Dm.segs.length; k++) {
+    const g = Dm.segs[k], da = g.valeur / total * 2 * Math.PI, Rk = survole === k ? R + 5 : R;
+    ctx.beginPath(); ctx.arc(cx, cy, Rk, a, a + da); ctx.arc(cx, cy, r, a + da, a, true); ctx.closePath();
+    ctx.fillStyle = cssVar(g.couleur); ctx.fill();
+    bornes.push([a, a + da]); a += da;
+  }
+  // 2 px de surface entre deux parts : c'est l'ecart qui separe, jamais un trait.
+  if (Dm.segs.length > 1) {
+    ctx.strokeStyle = cssVar("--surface"); ctx.lineWidth = 2;
+    for (const b of bornes) {
+      ctx.beginPath(); ctx.moveTo(cx + (r - 1) * Math.cos(b[0]), cy + (r - 1) * Math.sin(b[0]));
+      ctx.lineTo(cx + (R + 7) * Math.cos(b[0]), cy + (R + 7) * Math.sin(b[0])); ctx.stroke();
+    }
+  }
+  // Le % dans la part, seulement s'il y tient avec de l'air.
+  ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.font = POLICE_FORTE;
+  const rm = (R + r) / 2;
+  for (let k = 0; k < Dm.segs.length; k++) {
+    const g = Dm.segs[k], b = bornes[k], t = partPct(g.valeur / total), w = ctx.measureText(t).width;
+    if ((b[1] - b[0]) * rm < w + 14) continue;
+    const m = (b[0] + b[1]) / 2;
+    ctx.fillStyle = encreSur(rgb255(cssVar(g.couleur)));
+    ctx.fillText(t, cx + rm * Math.cos(m), cy + rm * Math.sin(m));
+  }
+  // Au centre : ce que l'anneau represente.
+  ctx.fillStyle = cssVar("--ink"); ctx.font = "600 16px system-ui, -apple-system, 'Segoe UI', sans-serif";
+  ctx.fillText(montant(Dm.investi, Dm.devise), cx, cy - 10);
+  ctx.font = POLICE; ctx.fillStyle = cssVar("--ink-2");
+  ctx.fillText("investis", cx, cy + 8);
+  if (Dm.equity > 0) ctx.fillText(partPct(Dm.investi / Dm.equity) + " du compte", cx, cy + 22);
+  if (!tip) return;
+  const quitter = function () { tipCacher(tip); drawDomaines(cv, null, Dm, -1); };
+  const survol = function (ev) {
+    const rc = cv.getBoundingClientRect(), px = ev.clientX - rc.left, py = ev.clientY - rc.top;
+    const dx = px - cx, dy = py - cy, dist = Math.sqrt(dx * dx + dy * dy);
+    if (dist < r - 6 || dist > R + 12) { quitter(); return; }
+    let ang = Math.atan2(dy, dx);
+    if (ang < -Math.PI / 2) ang += 2 * Math.PI;
+    let k = -1;
+    for (let j = 0; j < bornes.length; j++) if (ang >= bornes[j][0] && ang < bornes[j][1]) { k = j; break; }
+    if (k < 0) { quitter(); return; }
+    drawDomaines(cv, null, Dm, k);
+    const g = Dm.segs[k];
+    const L = [{ nom: "part des lignes", valeur: partPct(g.valeur / total, 1), couleur: cssVar(g.couleur) },
+               { nom: "part du compte", valeur: Dm.equity > 0 ? partPct(g.valeur / Dm.equity, 1) : "n/a" },
+               { nom: "montant", valeur: montant(g.valeur, Dm.devise) }];
+    for (const l of g.lignes.slice(0, 8)) L.push({ nom: l.ticker, valeur: montant(l.valeur, Dm.devise) });
+    if (g.lignes.length > 8) L.push({ nom: "et " + (g.lignes.length - 8) + " autre(s)", valeur: "" });
+    tipRemplir(tip, g.nom, L);
+    tipPoser(tip, S, px, py);
+  };
+  cv.onmousemove = survol; cv.onmouseleave = quitter; cv.onpointerdown = survol;
+}
+
+// Legende en DOM, noeud par noeud : tickers et libelles GICS viennent de
+// l'exterieur et ne passent jamais par innerHTML.
+function legendeDomaines(hote, Dm) {
+  const cle = JSON.stringify(Dm.segs.map(function (g) {
+    return [g.nom, Math.round(g.valeur), cssVar(g.couleur), g.lignes.length]; }).concat([Math.round(Dm.investi)]));
+  if (!hote || hote.dataset.cle === cle) return;
+  hote.dataset.cle = cle;
+  while (hote.firstChild) hote.removeChild(hote.firstChild);
+  const noeud = function (tag, classe, texte) {
+    const n = document.createElement(tag);
+    if (classe) n.className = classe;
+    if (texte !== undefined) n.textContent = texte;
+    return n;
+  };
+  if (Dm.tech.length) {
+    const f = noeud("div", "dom-famille");
+    f.appendChild(noeud("b", null, "Tech"));
+    f.appendChild(noeud("span", null, partPct(Dm.techTotal / Dm.investi) + " des lignes · " +
+                                      montant(Dm.techTotal, Dm.devise)));
+    hote.appendChild(f);
+  }
+  for (const g of Dm.segs) {
+    const row = noeud("div", "dom-ligne" + (g.tech ? " membre" : ""));
+    const i = noeud("i"); i.style.background = cssVar(g.couleur); row.appendChild(i);
+    row.appendChild(noeud("span", "nom", g.nom));
+    row.appendChild(noeud("b", null, partPct(g.valeur / Dm.investi)));
+    row.appendChild(noeud("span", "m", montant(g.valeur, Dm.devise)));
+    const detail = g.plis && (g.plis.length > 1 || g.nom === "Autres")
+      ? g.plis.map(function (p) { return p.nom + " : " + p.lignes.map(function (l) { return l.ticker; }).join(", "); }).join(" · ")
+      : g.lignes.map(function (l) { return l.ticker; }).join(", ");
+    row.appendChild(noeud("span", "tk", detail));
+    hote.appendChild(row);
+  }
+}
+
+function tuileDomaine(d, Dm) {
+  Dm = Dm || domainesDe(d);
+  if (!(Dm.investi > 0)) return tuile("Plus gros domaine", "n/a", "aucune ligne");
+  const f = Dm.familles[0];
+  if (!f) return tuile("Plus gros domaine", "n/a", "classement en cours");
+  return tuile("Plus gros domaine", partPct(f.valeur / Dm.investi),
+               "des lignes : " + echapper(f.nom) + " (" + f.n + "), " + montant(f.valeur, Dm.devise));
+}
+
+function renderDomaines(d, Dm) {
+  const msg = el("ops-domaines-msg"), corps = el("ops-domaines-corps");
+  if (!msg || !corps) return;
+  Dm = Dm || domainesDe(d);
+  const R = opsDomaines;
+  const cacher = function (texte, erreur) {
+    corps.hidden = true; msg.className = erreur ? "msg err" : "msg"; poserTexte(msg, texte);
+  };
+  if (!Dm.nLignes) { cacher("Aucune ligne detenue : tout le compte est en liquidites."); return; }
+  if (Dm.nonClasses === Dm.nLignes) {
+    if (R && R.erreur && !R.en_cours) cacher("Classement des secteurs indisponible : " + R.erreur + ". Nouvel essai dans l'heure.", true);
+    else cacher(R && R.en_cours ? "Classement des secteurs en cours de telechargement (Wikipedia)..."
+                                : "Classement des lignes...");
+    return;
+  }
+  corps.hidden = false;
+  msg.className = "msg";
+  poserTexte(msg, Dm.nonClasses ? Dm.nonClasses + " ligne(s) sans classement GICS (absentes de la table " +
+                                   "du S&P 500) : regroupees en gris." : "");
+  drawDomaines(el("cv-domaines"), el("tip-domaines"), Dm);
+  legendeDomaines(el("leg-domaines"), Dm);
+  poserTexte(el("ops-domaines-source"), "Classement GICS des constituants du S&P 500 (Wikipedia)" +
+             (R && R.mis_a_jour ? ", releve le " + jourCourt(R.mis_a_jour) : "") +
+             ". La tech y est coupee en trois : puces, materiel, logiciels. Dans la barre du " +
+             "dessus, les lignes sont rangees par domaine, aux memes couleurs.");
+  const lignes = [];
+  for (const g of Dm.segs) for (const l of g.lignes) {
+    const i = l.info || {};
+    lignes.push({ cells: [echapper(l.ticker), echapper(i.domaine || NON_CLASSE), echapper(i.secteur || ""),
+                          echapper(i.sous_industrie || ""), montant(l.valeur, Dm.devise),
+                          partPct(l.valeur / Dm.investi, 1)] });
+  }
+  buildTable(el("tv-domaines"), ["Ticker", "Domaine", "Secteur GICS", "Sous-industrie GICS",
+                                 "Valeur", "Part des lignes"], lignes);
+}
+
+// ---------------------------------------------------------------------------
+// Le capital, en dollars : depuis le depart, par seance, semaine ou mois
+// ---------------------------------------------------------------------------
+// Le defi compte ses pertes en % du DEPART, comme le contrat. Ici chaque
+// variation est rapportee a la cloture de la periode precedente : c'est le
+// rendement au sens habituel, celui qui se compose d'une periode a l'autre.
+let capitalMode = "seance";
+
+// La date du jour a New York : c'est elle qui dit si la valeur en direct est
+// une seance de plus sur la courbe.
+function jourNY() {
+  try { return new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" }); }
+  catch (e) { return new Date().toISOString().slice(0, 10); }
+}
+function ouvreNY() {
+  try {
+    const j = new Date().toLocaleDateString("en-US", { timeZone: "America/New_York", weekday: "short" });
+    return j !== "Sat" && j !== "Sun";
+  } catch (e) { return true; }
+}
+function deriverCapital(h, d) {
+  if (!h || !h.ok || !h.dates || !h.dates.length) return null;
+  const dates = [], eq = [];
+  for (let i = 0; i < h.dates.length; i++)
+    if (propre(h.equity[i]) && h.equity[i] > 0) { dates.push(h.dates[i]); eq.push(h.equity[i]); }
+  if (!dates.length) return null;
+  const f = h.defi || {}, depart = f.depart || eq[0];
+  // La valeur en direct prolonge la courbe d'un point "maintenant" : seance en
+  // cours, ou seance close que l'historique du courtier n'a pas encore.
+  let direct = false;
+  const vif = d && d.connecte && d.compte ? d.compte.equity : null;
+  if (propre(vif) && vif > 0) {
+    const auj = jourNY(), der = dates.length - 1;
+    if (dates[der] === auj) { if (d.marche_ouvert) { eq[der] = vif; direct = true; } }
+    else if (dates[der] < auj && ouvreNY() && Math.abs(vif - eq[der]) >= 0.5) {
+      dates.push(auj); eq.push(vif); direct = true;
+    }
+  }
+  const n = dates.length, depuis = [], v = [], vM = [], haut = [], recul = [];
+  let sommet = depart, iHaut = -1;
+  for (let i = 0; i < n; i++) {
+    const e = eq[i], prec = i ? eq[i - 1] : depart;
+    depuis.push(e / depart - 1);
+    if (!i && Math.abs(e - depart) < 0.5) { v.push(null); vM.push(null); }
+    else { v.push(e / prec - 1); vM.push(e - prec); }
+    if (e > sommet) { sommet = e; iHaut = i; }
+    haut.push(sommet); recul.push(e / sommet - 1);
+  }
+  return { dates: dates, equity: eq, depart: depart, direct: direct, ouvert: !!(d && d.marche_ouvert),
+           depuis: depuis, v: v, vM: vM, haut: haut, recul: recul, iHaut: iHaut,
+           devise: d && d.compte ? d.compte.devise : "USD" };
+}
+function lundiDe(j) {
+  const t = Date.UTC(parseInt(j.slice(0, 4), 10), parseInt(j.slice(5, 7), 10) - 1, parseInt(j.slice(8, 10), 10));
+  const recul = (new Date(t).getUTCDay() + 6) % 7;
+  return new Date(t - recul * 86400000).toISOString().slice(0, 10);
+}
+// Les barres du bas : une par seance, par semaine ou par mois. Chaque periode
+// part de la cloture de la precedente ; la premiere part du capital de depart.
+function periodesCapital(C, mode) {
+  const n = C.dates.length, P = [];
+  if (mode === "seance") {
+    for (let i = 0; i < n; i++) if (propre(C.v[i]))
+      P.push({ i0: i, i1: i, r: C.v[i], m: C.vM[i], fin: C.equity[i],
+               titre: jourLong(C.dates[i]) + (C.direct && i === n - 1 ? " · maintenant" : "") });
+    return P;
+  }
+  const cle = mode === "mois" ? function (j) { return j.slice(0, 7); } : lundiDe;
+  for (let i = 0; i < n; i++) {
+    const k = cle(C.dates[i]), der = P[P.length - 1];
+    if (!der || der.cle !== k) P.push({ cle: k, i0: i, i1: i, base: der ? C.equity[der.i1] : C.depart });
+    else der.i1 = i;
+  }
+  for (const p of P) {
+    p.fin = C.equity[p.i1]; p.r = p.fin / p.base - 1; p.m = p.fin - p.base;
+    const encours = C.direct && p.i1 === n - 1 ? " (en cours)" : "";
+    if (mode === "mois") {
+      p.titre = moisLong(p.cle) + encours;
+      p.axe = MOIS_COURTS[parseInt(p.cle.slice(5, 7), 10) - 1];
+    } else {
+      p.titre = "Semaine du " + jourCourt(C.dates[p.i0]) + " au " + jourCourt(C.dates[p.i1]) + encours;
+      p.axe = jourCourt(C.dates[p.i0]);
+    }
+  }
+  return P;
+}
+function kDollars(t, pas) { return fmtNum(t / 1000, pas < 1000 ? 1 : 0) + NB + "k$"; }
+
+// La courbe du capital, en dollars, sur les memes tranches de seance que le
+// defi. Le trait du depart separe le gagne du perdu ; le lavis au-dessus et
+// au-dessous dit le SIGNE, a 12 % d'opacite, jamais un aplat.
+function drawCapital(cv, tip, C, croix) {
+  const S = surface(cv, 280), ctx = S.ctx, n = C.dates.length;
+  if (!n) return;
+  const G = geoSeances(S, n, 58, 128, 16, 26);
+  const x0 = G.x0, x1 = G.x1, y0 = G.y0, y1 = G.y1, tx = G.tx;
+  let lo = C.depart, hi = C.depart;
+  for (const e of C.equity) { lo = Math.min(lo, e); hi = Math.max(hi, e); }
+  const marge = (hi - lo) * 0.10 || C.depart * 0.01; lo -= marge; hi += marge;
+  const ty = function (v) { return y1 - (v - lo) / (hi - lo) * (y1 - y0); };
+  axeY(ctx, lo, hi, ty, x0, x1, y0, y1, kDollars);
+  axeSeances(ctx, C.dates, tx, y0, y1, x1);
+  const z = ty(C.depart), cC = cssVar("--series-1");
+  if (n > 1) {
+    for (const zo of [[y0, z, cssVar("--pos")], [z, y1, cssVar("--neg")]]) {
+      ctx.save(); ctx.beginPath(); ctx.rect(x0, zo[0], x1 - x0, zo[1] - zo[0]); ctx.clip();
+      ctx.beginPath(); ctx.moveTo(tx(0), z);
+      for (let i = 0; i < n; i++) ctx.lineTo(tx(i), ty(C.equity[i]));
+      ctx.lineTo(tx(n - 1), z); ctx.closePath();
+      ctx.globalAlpha = 0.12; ctx.fillStyle = zo[2]; ctx.fill(); ctx.restore();
+    }
+  }
+  const zl = Math.round(z) + 0.5;
+  ctx.strokeStyle = cssVar("--axis"); ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(x0, zl); ctx.lineTo(x1, zl); ctx.stroke();
+  // La courbe ; le dernier troncon est tirete quand il mene a la valeur en direct.
+  const fin = C.direct ? n - 2 : n - 1;
+  ctx.strokeStyle = cC; ctx.lineWidth = 2; ctx.lineJoin = "round"; ctx.lineCap = "round";
+  ctx.beginPath();
+  for (let i = 0; i <= fin; i++) { if (!i) ctx.moveTo(tx(i), ty(C.equity[i])); else ctx.lineTo(tx(i), ty(C.equity[i])); }
+  ctx.stroke();
+  if (C.direct && n > 1) {
+    ctx.save(); ctx.setLineDash([4, 3]); ctx.beginPath();
+    ctx.moveTo(tx(n - 2), ty(C.equity[n - 2])); ctx.lineTo(tx(n - 1), ty(C.equity[n - 1])); ctx.stroke();
+    ctx.restore();
+  }
+  // Le plus haut : une seule etiquette, au-dessus de son point.
+  if (C.iHaut >= 0 && C.haut[n - 1] > C.depart * 1.002) {
+    const X = tx(C.iHaut), Y = ty(C.equity[C.iHaut]);
+    point(ctx, X, Y, cC);
+    const t = "plus haut " + montant(C.equity[C.iHaut], C.devise);
+    ctx.font = POLICE; ctx.fillStyle = cssVar("--ink-2"); ctx.textAlign = "center"; ctx.textBaseline = "bottom";
+    const w = ctx.measureText(t).width;
+    ctx.fillText(t, Math.min(Math.max(X, x0 + w / 2), x1 - w / 2), Math.max(y0 + 12, Y - 8));
+  }
+  // Bout de courbe : point plein a la cloture, anneau pour la valeur en direct.
+  const XL = tx(n - 1), YL = ty(C.equity[n - 1]);
+  if (C.direct) {
+    ctx.beginPath(); ctx.arc(XL, YL, 4.5, 0, 6.2832); ctx.fillStyle = cssVar("--surface"); ctx.fill();
+    ctx.lineWidth = 2; ctx.strokeStyle = cC; ctx.stroke();
+    ctx.font = POLICE; ctx.fillStyle = cssVar("--ink-2"); ctx.textAlign = "right"; ctx.textBaseline = "bottom";
+    ctx.fillText("maintenant", XL - 8, YL - 6);
+  } else point(ctx, XL, YL, cC);
+  etiquettesDroite(ctx, [
+    { y: zl, texte: "depart " + kDollars(C.depart, 1000), couleur: cssVar("--axis") },
+    { y: YL, texte: montant(C.equity[n - 1], C.devise) + " · " + fmtSigned(C.depuis[n - 1], 2),
+      couleur: cC, fort: true }], x1, y0, y1);
+  if (croix !== undefined && croix >= 0) {
+    const X = Math.round(tx(croix)) + 0.5;
+    ctx.strokeStyle = cssVar("--axis"); ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(X, y0); ctx.lineTo(X, y1); ctx.stroke();
+    point(ctx, tx(croix), ty(C.equity[croix]), cC);
+  }
+  if (!tip) return;
+  const quitter = function () { tipCacher(tip); drawCapital(cv, null, C, -1); };
+  const survol = function (ev) {
+    const rc = cv.getBoundingClientRect(), px = ev.clientX - rc.left;
+    if (px < x0 - 6 || px > x1 + 6) { quitter(); return; }
+    const i = Math.max(0, Math.min(n - 1, Math.floor((px - x0) / G.pas)));
+    drawCapital(cv, null, C, i);
+    const vivant = C.direct && i === n - 1;
+    const L = [{ nom: "capital", valeur: montant(C.equity[i], C.devise), couleur: cC },
+               { nom: "depuis le depart", valeur: fmtSigned(C.depuis[i], 2) + " · " + argent(C.equity[i] - C.depart, C.devise) },
+               { nom: vivant ? "depuis la derniere cloture" : "sur la seance",
+                 valeur: propre(C.v[i]) ? fmtSigned(C.v[i], 2) + " · " + argent(C.vM[i], C.devise) : "premier jour" },
+               { nom: "depuis le plus haut",
+                 valeur: C.recul[i] < -0.00005 ? fmtSigned(C.recul[i], 2) + " (" + montant(C.haut[i], C.devise) + ")" : "au plus haut" }];
+    tipRemplir(tip, jourLong(C.dates[i]) + (vivant ? " · maintenant" : ""), L);
+    tipPoser(tip, S, tx(i), ev.clientY - rc.top);
+  };
+  cv.onmousemove = survol; cv.onmouseleave = quitter; cv.onpointerdown = survol;
+}
+
+// Les variations, alignees sur les seances de la courbe du dessus : une barre
+// de semaine ou de mois se tient sous les seances qu'elle couvre.
+function drawVariations(cv, tip, C, mode, survolee) {
+  const S = surface(cv, 190), ctx = S.ctx, n = C.dates.length, P = periodesCapital(C, mode);
+  if (!n || !P.length) return;
+  const G = geoSeances(S, n, 58, 128, 18, 26);
+  const x0 = G.x0, x1 = G.x1, y0 = G.y0, y1 = G.y1, tx = G.tx, groupe = mode !== "seance";
+  let lo = 0, hi = 0;
+  for (const p of P) { lo = Math.min(lo, p.r); hi = Math.max(hi, p.r); }
+  if (hi - lo < 0.01) { hi = Math.max(hi, 0.005); lo = Math.min(lo, -0.005); }
+  const marge = (hi - lo) * (groupe ? 0.2 : 0.12); lo -= marge; hi += marge;
+  const ty = function (v) { return y1 - (v - lo) / (hi - lo) * (y1 - y0); };
+  axeY(ctx, lo, hi, ty, x0, x1, y0, y1, pctAxe);
+  if (!groupe) axeSeances(ctx, C.dates, tx, y0, y1, x1);
+  else {
+    // Une etiquette par periode, un filet entre deux periodes.
+    ctx.textAlign = "center"; ctx.textBaseline = "top";
+    let finTexte = -Infinity;
+    for (let k = 0; k < P.length; k++) {
+      const p = P[k], X = (tx(p.i0) + tx(p.i1)) / 2, w = ctx.measureText(p.axe).width;
+      if (k) {
+        const B = Math.round(x0 + G.pas * p.i0) + 0.5;
+        ctx.strokeStyle = cssVar("--grid"); ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(B, y0); ctx.lineTo(B, y1); ctx.stroke();
+      }
+      if (X - w / 2 > finTexte + 8) {
+        ctx.fillStyle = cssVar("--muted"); ctx.fillText(p.axe, X, y1 + 7); finTexte = X + w / 2;
+      }
+    }
+  }
+  const cP = cssVar("--pos"), cN = cssVar("--neg");
+  for (let k = 0; k < P.length; k++) {
+    const p = P[k], X = (tx(p.i0) + tx(p.i1)) / 2;
+    const w = Math.max(3, Math.min(24, (p.i1 - p.i0 + 1) * G.pas * 0.62));
+    ctx.globalAlpha = survolee === undefined || survolee < 0 || survolee === k ? 1 : 0.5;
+    ctx.fillStyle = p.r >= 0 ? cP : cN;
+    barreV(ctx, X - w / 2, w, ty(0), ty(p.r));
+    ctx.globalAlpha = 1;
+    // Par semaine ou par mois, peu de barres : chacune porte sa valeur.
+    if (groupe) {
+      ctx.font = POLICE_FORTE; ctx.fillStyle = cssVar("--ink-2"); ctx.textAlign = "center";
+      ctx.textBaseline = p.r >= 0 ? "bottom" : "top";
+      ctx.fillText(fmtSigned(p.r, 1), X, p.r >= 0 ? ty(p.r) - 4 : ty(p.r) + 4);
+      ctx.font = POLICE;
+    }
+  }
+  const z = Math.round(ty(0)) + 0.5;
+  ctx.strokeStyle = cssVar("--axis"); ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(x0, z); ctx.lineTo(x1, z); ctx.stroke();
+  if (!tip) return;
+  const quitter = function () { tipCacher(tip); drawVariations(cv, null, C, mode, -1); };
+  const survol = function (ev) {
+    const rc = cv.getBoundingClientRect(), i = Math.floor((ev.clientX - rc.left - x0) / G.pas);
+    let k = -1;
+    for (let j = 0; j < P.length; j++) if (i >= P[j].i0 && i <= P[j].i1) { k = j; break; }
+    if (k < 0) { quitter(); return; }
+    drawVariations(cv, null, C, mode, k);
+    const p = P[k];
+    const L = [{ nom: "variation", valeur: fmtSigned(p.r, 2), couleur: p.r >= 0 ? cP : cN },
+               { nom: "en montant", valeur: argent(p.m, C.devise) },
+               { nom: "capital en fin de periode", valeur: montant(p.fin, C.devise) }];
+    if (groupe) L.push({ nom: "seances", valeur: String(p.i1 - p.i0 + 1) });
+    tipRemplir(tip, p.titre, L);
+    tipPoser(tip, S, (tx(p.i0) + tx(p.i1)) / 2, ev.clientY - rc.top);
+  };
+  cv.onmousemove = survol; cv.onmouseleave = quitter; cv.onpointerdown = survol;
+}
+
+function renderCapital() {
+  const bloc = el("ops-capital");
+  if (!bloc) return;
+  const C = deriverCapital(opsHisto, opsEtatCourant);
+  if (!C) { bloc.hidden = true; return; }
+  bloc.hidden = false;
+  const n = C.dates.length, e = C.equity[n - 1], dev = C.devise, dv = C.v[n - 1];
+  const moment = C.direct ? (C.ouvert ? "maintenant, seance en cours" : "maintenant, avant le releve du soir")
+                          : "a la cloture du " + jourCourt(C.dates[n - 1]);
+  poser(el("ops-capital-tuiles"),
+    tuile("Capital", montant(e, dev), moment) +
+    tuile("Depuis le depart", fmtSigned(C.depuis[n - 1], 2),
+          argent(e - C.depart, dev) + " sur " + montant(C.depart, dev)) +
+    tuile(C.direct ? "Aujourd'hui" : "Derniere seance", propre(dv) ? fmtSigned(dv, 2) : "n/a",
+          !propre(dv) ? "premier jour" :
+          argent(C.vM[n - 1], dev) + (C.direct && n > 1 ? " depuis la cloture du " + jourCourt(C.dates[n - 2])
+                                                        : " le " + jourCourt(C.dates[n - 1]))) +
+    tuile("Depuis le plus haut", C.recul[n - 1] < -0.00005 ? fmtSigned(C.recul[n - 1], 2) : "au plus haut",
+          "plus haut " + montant(C.haut[n - 1], dev) +
+          (C.iHaut >= 0 ? " le " + jourCourt(C.dates[C.iHaut]) : " : le depart")));
+  drawCapital(el("cv-capital"), el("tip-capital"), C);
+  drawVariations(el("cv-variations"), el("tip-variations"), C, capitalMode);
+  poserTexte(el("capital-note"), capitalMode === "seance"
+    ? "Chaque barre : une seance, en % de la cloture de la veille. Le defi, lui, compte en % du depart."
+    : capitalMode === "semaine"
+      ? "Chaque barre : une semaine, en % de la cloture de la semaine precedente ; la premiere part du capital de depart."
+      : "Chaque barre : un mois, en % de la cloture du mois precedent ; le premier part du capital de depart.");
+  const lignes = [];
+  for (let i = n - 1; i >= 0; i--)
+    lignes.push({ cells: [C.dates[i] + (C.direct && i === n - 1 ? " (maintenant)" : ""), montant(C.equity[i], dev),
+                          propre(C.v[i]) ? fmtSigned(C.v[i], 2) : "", propre(C.vM[i]) ? argent(C.vM[i], dev) : "",
+                          fmtSigned(C.depuis[i], 2),
+                          C.recul[i] < -0.00005 ? fmtSigned(C.recul[i], 2) : "au plus haut"] });
+  buildTable(el("tv-capital"), ["Seance", "Capital", "Seance (%)", "Seance ($)", "Depuis le depart",
+                                "Depuis le plus haut"], lignes);
+}
+document.querySelectorAll("[data-capital]").forEach(function (b) {
+  b.onclick = function () {
+    capitalMode = b.getAttribute("data-capital");
+    document.querySelectorAll("[data-capital]").forEach(function (x) {
+      x.setAttribute("aria-pressed", x === b ? "true" : "false"); });
+    renderCapital();
+  };
+});
 
 // L'historique ne doit jamais faire echouer le reste de l'ecran : il gere
 // ses erreurs lui-meme et affiche une phrase a la place de la courbe.
@@ -2950,6 +3513,24 @@ PAGE = """<!doctype html>
       </div>
     </section>
 
+    <section class="card" id="ops-capital" hidden>
+      <h3>Le capital, en dollars</h3>
+      <p class="regarder">A regarder : <b>la courbe par rapport au trait du depart.</b> Au-dessus,
+        le compte vaut plus qu'au premier jour ; en dessous, il a perdu de l'argent. Un anneau en
+        bout de courbe : la valeur en direct, qui n'est pas encore une cloture.</p>
+      <div class="tiles" id="ops-capital-tuiles"></div>
+      <div class="plot"><canvas id="cv-capital"></canvas><div class="tip" id="tip-capital"></div></div>
+      <h4>Les variations</h4>
+      <div class="bascule" role="group" aria-label="Periode des variations">
+        <button type="button" data-capital="seance" aria-pressed="true">Par seance</button>
+        <button type="button" data-capital="semaine" aria-pressed="false">Par semaine</button>
+        <button type="button" data-capital="mois" aria-pressed="false">Par mois</button>
+      </div>
+      <div class="plot"><canvas id="cv-variations"></canvas><div class="tip" id="tip-variations"></div></div>
+      <p class="note-graphe" id="capital-note"></p>
+      <details class="tv"><summary>Vue tableau</summary><div id="tv-capital"></div></details>
+    </section>
+
     <section class="card" id="ops-argent" hidden>
       <h3>Ou est l'argent</h3>
       <p class="regarder">A regarder : <b>la part investie.</b> Ce qui n'est pas investi dort
@@ -2958,6 +3539,16 @@ PAGE = """<!doctype html>
       <div class="tiles" id="ops-argent-tuiles"></div>
       <h4>Aujourd'hui, sur 100 du compte</h4>
       <div class="plot"><canvas id="cv-repartition"></canvas><div class="tip" id="tip-repartition"></div></div>
+      <h4>Par domaine d'activite</h4>
+      <p class="regarder">A regarder : <b>le plus gros bloc.</b> Des lignes du meme domaine montent et
+        baissent souvent ensemble : quatre semi-conducteurs pesent comme un seul pari, pas comme
+        quatre.</p>
+      <div id="ops-domaines-msg" class="msg"></div>
+      <div class="domaines" id="ops-domaines-corps" hidden>
+        <div class="plot"><canvas id="cv-domaines"></canvas><div class="tip" id="tip-domaines"></div></div>
+        <div><div class="dom-liste" id="leg-domaines"></div><div class="dom-source" id="ops-domaines-source"></div></div>
+      </div>
+      <details class="tv"><summary>Vue tableau</summary><div id="tv-domaines"></div></details>
       <h4>Part investie, seance par seance</h4>
       <p class="regarder">D'apres le releve de chaque soir. Memes seances que la courbe du
         defi : un decrochage ici se lit a l'aplomb de celle du dessus.</p>

@@ -34,7 +34,7 @@ from pathlib import Path
 
 import _bootstrap  # noqa: F401
 
-from quantbot import datafeed, explore, operations, webui
+from quantbot import datafeed, domaines, explore, operations, webui
 from quantbot import version as version_code
 from quantbot.backtest import BenchmarkMissingError
 from quantbot.config import Config
@@ -145,6 +145,10 @@ def serve(cfg, prices, port, open_browser=True):
             pass
 
     ops = operations.Operations(cfg, charger_prix)
+
+    # Domaine d'activite des lignes (camembert de "Ou est l'argent") : lu dans
+    # data/sp500_secteurs.csv, complete en tache de fond depuis Wikipedia.
+    classement = domaines.Classement()
 
     # La version CHARGEE par ce processus, lue une fois : apres une mise a
     # jour du disque, elle reste l'ancienne tant qu'on ne redemarre pas le
@@ -274,6 +278,16 @@ def serve(cfg, prices, port, open_browser=True):
                 # moteur pour une minute et demie.
                 self._send(200, json.dumps(historique(), ensure_ascii=False,
                                            allow_nan=False).encode("utf-8"),
+                           "application/json; charset=utf-8")
+                return
+            if self.path == "/api/ops/domaines":
+                # Hors verrou : une lecture de cache. Un telechargement, s'il le
+                # faut, part dans un fil a part ; la page redemande ensuite.
+                demandes = payload.get("tickers") if isinstance(payload, dict) else None
+                tickers = [t for t in (demandes if isinstance(demandes, list) else [])[:300]
+                           if isinstance(t, str) and 0 < len(t) <= 12]
+                self._send(200, json.dumps(classement.pour(tickers),
+                                           ensure_ascii=False).encode("utf-8"),
                            "application/json; charset=utf-8")
                 return
             if self.path == "/api/version":
