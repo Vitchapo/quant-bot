@@ -76,6 +76,9 @@ traduit un verrou en ordres de vente.
 from __future__ import annotations
 
 import json
+import os
+import threading
+import time
 from datetime import date
 from pathlib import Path
 
@@ -88,22 +91,89 @@ PERTE_TOTALE_DEFAUT = 0.08   # le contrat dit typiquement 10 %
 #: Motifs de verrou. Les deux bloquent l'envoi ; seul le libelle change.
 VERROU_PERTE = "perte"
 VERROU_OBJECTIF = "objectif"
+VERROU_OBJECTIF = "objectif"
+#: Pose par un fichier d'etat qu'on n'a pas su lire (voir `lire_etat`). Il
+#: bloque les achats comme les deux autres, mais ne demande aucune vente.
+VERROU_ILLISIBLE = "etat illisible"
+#: Cle d'un etat lu sur un fichier illisible : `ecrire_etat` ne l'ecrit jamais.
+ILLISIBLE = "illisible"
 
 
 def lire_etat(chemin=None) -> dict:
+    """L'etat du defi sur disque.
+
+    Fichier ABSENT : aucun defi en cours, `{}`. Le prochain passage en ouvre
+    un a la valeur du compte. C'est le seul chemin vers un defi neuf, et il
+    reste explicite : supprimer le fichier.
+
+    Fichier ILLISIBLE (vide, abime, pas du JSON) : un etat VERROUILLE, jamais
+    `{}`. L'ancienne lecture rendait `{}` dans les deux cas : un fichier lu
+    vide devenait un defi neuf, que le lecteur reecrivait aussitot. Le
+    28/10/2026, le depart de 100 000 $ est ainsi devenu 96 641,87 $ et le plus
+    haut a ete efface, sans un message : le garde-fou de -8 % passait de
+    92 000 $ a 88 910 $, SOUS la limite du contrat. Un etat qu'on ne sait pas
+    lire est un defi dont on a perdu les references. On bloque les achats, on
+    ne vend rien - rien ne dit qu'une limite est franchie - et on n'ecrit
+    jamais par-dessus le fichier, pour pouvoir le reparer.
+    """
     chemin = Path(chemin) if chemin else ETAT_DEFI
     if not chemin.exists():
         return {}
     try:
-        return json.loads(chemin.read_text(encoding="utf-8"))
-    except (ValueError, OSError):
-        return {}
+        etat = json.loads(chemin.read_text(encoding="utf-8"))
+        if not isinstance(etat, dict):
+            raise ValueError("un objet JSON etait attendu, pas %s" % type(etat).__name__)
+        return etat
+    except (ValueError, OSError) as exc:
+        cause = "%s : %s" % (type(exc).__name__, str(exc)[:120])
+        return {ILLISIBLE: "%s illisible (%s)" % (chemin, cause),
+                "a_solder": False,
+                "verrou": {"raison": VERROU_ILLISIBLE, "depuis": str(date.today()),
+                           "equity": 0.0,
+                           "detail": "%s illisible (%s). Repare-le, ou supprime-le pour "
+                                     "commencer un defi neuf" % (chemin.name, cause)}}
 
 
 def ecrire_etat(etat: dict, chemin=None) -> None:
+    """Ecriture ATOMIQUE : fichier temporaire, puis renommage.
+
+    `write_text` vide le fichier avant de le remplir. Trois processus le
+    relisent sans arret - tableau de bord, veille, robot - et celui qui
+    passait a cet instant trouvait un fichier vide. Un renommage, lui, est
+    atomique : un lecteur voit l'ancien contenu ou le nouveau, jamais un
+    fichier vide ou a moitie ecrit.
+
+    Un etat marque ILLISIBLE n'est jamais ecrit : le fichier qu'on n'a pas su
+    lire reste tel quel, pour qu'on puisse le reparer.
+    """
+    if (etat or {}).get(ILLISIBLE):
+        return
     chemin = Path(chemin) if chemin else ETAT_DEFI
     chemin.parent.mkdir(parents=True, exist_ok=True)
-    chemin.write_text(json.dumps(etat, indent=1, sort_keys=True), encoding="utf-8")
+    # Un nom par processus ET par fil : le tableau de bord sert ses requetes
+    # dans plusieurs fils, qui ne doivent pas partager un fichier temporaire.
+    tmp = chemin.with_name("%s.%d-%d.tmp" % (chemin.name, os.getpid(), threading.get_ident()))
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps(etat, indent=1, sort_keys=True))
+            fh.flush()
+            os.fsync(fh.fileno())
+        for essai in range(10):
+            try:
+                os.replace(tmp, chemin)
+                break
+            except PermissionError:
+                # Windows : un lecteur qui tient le fichier ouvert empeche le
+                # renommage pendant quelques millisecondes.
+                if essai == 9:
+                    raise
+                time.sleep(0.02)
+    except BaseException:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
 
 
 def parametres(cfg):
@@ -151,6 +221,8 @@ def marquer_solde(etat: dict) -> dict:
 
 
 def _libelle(verrou: dict) -> str:
+    if (verrou or {}).get("raison") == VERROU_ILLISIBLE:
+        return "VERROU (etat du defi illisible) : %s" % verrou.get("detail", "")
     if (verrou or {}).get("raison") == VERROU_OBJECTIF:
         return "VERROU (objectif atteint le %s) : %s" % (
             verrou.get("depuis", "?"), verrou.get("detail", ""))

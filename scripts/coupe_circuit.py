@@ -338,6 +338,11 @@ def montrer(args) -> int:
 
 def lever(args) -> int:
     etat = defi.lire_etat()
+    if etat.get(defi.ILLISIBLE):
+        print("ETAT DU DEFI ILLISIBLE : %s" % etat[defi.ILLISIBLE])
+        print("Il n'y a pas de verrou a lever : il faut d'abord reparer le fichier")
+        print("(capital_depart, plus_haut), ou le supprimer pour un defi neuf.")
+        return VERROU
     if not etat.get("verrou"):
         print("Aucun verrou en place.")
         return RIEN

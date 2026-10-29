@@ -126,6 +126,23 @@ class TestControles:
         etat = _ops(cfg_ops, panneau, api).etat()
         assert _controle(etat, "Valorisation coherente")["ok"] is True
 
+    def test_les_miettes_d_une_vente_ne_bloquent_pas(self, cfg_ops, panneau):
+        """28/10/2026 : apres la liquidation, il ne restait que des reliquats
+        de moins d'un millionieme de titre. Le controle comparait deux
+        quasi-zeros - "3,5 % d'ecart" pour moins d'un centime - et le robot,
+        qui le tient pour bloquant, ne pouvait plus racheter."""
+        miettes = {"T00": 7.67e-7, "T01": 9.65e-7, "T02": 4e-7}
+        api = FauxApi(positions=miettes,
+                      marche={t: 100.0 * q * 1.035 for t, q in miettes.items()})
+        c = _controle(_ops(cfg_ops, panneau, api).etat(), "Valorisation coherente")
+        assert c["ok"] is True and c["detail"] == "aucune position a valoriser"
+
+    def test_une_vraie_ligne_parmi_les_miettes_reste_controlee(self, cfg_ops, panneau):
+        api = FauxApi(positions={"T00": 10.0, "T01": 7.67e-7},
+                      marche={"T00": 5000.0, "T01": 0.0001})
+        etat = _ops(cfg_ops, panneau, api).etat()
+        assert _controle(etat, "Valorisation coherente")["ok"] is False
+
     def test_un_achat_a_credit_est_detecte(self, cfg_ops, panneau):
         api = FauxApi(cash=10.0)          # il faut acheter 100 000 avec 10 de liquidites
         etat = _ops(cfg_ops, panneau, api).etat()
@@ -780,6 +797,21 @@ class TestVerrouEtLiquidation:
         api = FauxApi(positions={"T01": -10.0}, marche={"T01": -1000.0})
         _ops(self._cfg(cfg_ops), panneau, api).solder()
         assert api.envoyes == [("T01", "buy")]
+
+    def test_un_etat_illisible_bloque_sans_vendre_ni_ecraser(self, cfg_ops, panneau,
+                                                             _etat_isole):
+        """28/10/2026 : un etat lu vide etait pris pour un defi neuf et reecrit
+        aussitot, depart a la valeur du moment. Il bloque desormais les achats,
+        ne vend rien, et reste tel quel sur le disque."""
+        _etat_isole.write_text("", encoding="utf-8")
+        api = FauxApi(equity=96_641.87, veille=96_000.0,
+                      positions={"T01": 50.0}, marche={"T01": 5_000.0})
+        o = _ops(self._cfg(cfg_ops), panneau, api)
+        assert _controle(o.etat(), "Limites du defi")["ok"] is False
+        applique = o.appliquer_defi()
+        assert applique["verrou"] is not None and applique["solde"] is None
+        assert api.envoyes == []
+        assert _etat_isole.read_text(encoding="utf-8") == ""
 
     def test_solder_ignore_les_poussieres(self, cfg_ops, panneau):
         """Un ordre a quantite nulle est refuse par le courtier a chaque

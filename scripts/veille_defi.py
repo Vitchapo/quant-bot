@@ -97,6 +97,12 @@ def montrer_etat(cfg) -> int:
         print("Mode defi INACTIF (defi.active est faux dans %s)." % cfg.path)
         return RIEN
     etat = defi.lire_etat()
+    if etat.get(defi.ILLISIBLE):
+        print("ETAT DU DEFI ILLISIBLE : %s" % etat[defi.ILLISIBLE])
+        print("Le bot est bloque : il n'achete plus rien et ne vend rien. Repare le")
+        print("fichier (capital_depart, plus_haut), ou supprime-le pour commencer un")
+        print("defi neuf a la valeur du compte.")
+        return VERROU
     if not etat:
         print("Aucun etat enregistre : le defi n'a pas encore commence.")
         print("Le prochain passage fixera le capital de depart a la valeur du compte.")
@@ -133,6 +139,11 @@ def lever(cfg) -> int:
         print("Mode defi inactif : il n'y a pas de verrou a lever.")
         return RIEN
     etat = defi.lire_etat()
+    if etat.get(defi.ILLISIBLE):
+        print("ETAT DU DEFI ILLISIBLE : %s" % etat[defi.ILLISIBLE])
+        print("Il n'y a pas de verrou a lever : il faut d'abord reparer le fichier")
+        print("(capital_depart, plus_haut), ou le supprimer pour un defi neuf.")
+        return VERROU
     verrou = etat.get("verrou")
     if not verrou:
         print("Aucun verrou en place.")

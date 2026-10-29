@@ -28,6 +28,11 @@ ETAT_ROBOT = Path("data/robot_etat.json")
 #: liquidites seance par seance, que l'historique du courtier ne donne pas.
 RELEVE = Path("data/releve_quotidien.csv")
 
+#: En dessous de cette valeur, une ligne n'entre pas dans le controle
+#: "Valorisation coherente" : un ecart RELATIF entre deux montants de moins
+#: d'un dollar ne mesure que des arrondis (voir `etat`).
+POUSSIERE_VALO = 1.0
+
 COLONNES = ["horodatage", "compte", "mode", "ticker", "sens", "quantite", "montant",
             "cours", "date_cours", "cours_marche", "fourchette_bps", "motif",
             "statut", "id_courtier"]
@@ -587,9 +592,19 @@ class Operations:
         # ecart important entre les deux signale un cache perime : les poids
         # affiches ne veulent alors plus dire la meme chose d'un tableau a
         # l'autre, et le dimensionnement des ordres est fausse.
+        #
+        # Les miettes ne se valorisent pas. Une vente tronque sa quantite au
+        # millionieme de titre pour ne jamais demander plus que le detenu :
+        # chaque ligne soldee laisse donc un reliquat de quelques millioniemes
+        # de dollar. Le 28/10/2026, sur un compte entierement solde, il ne
+        # restait qu'elles, et ce controle comparait deux quasi-zeros - "3,5 %
+        # d'ecart" entre deux montants arrondis a 0 $ - que le robot tient pour
+        # bloquants : il ne pouvait plus racheter.
+        reelles = [p for p in detail
+                   if abs(float(p.get("market_value") or 0.0)) >= POUSSIERE_VALO]
         valeur_cache = sum(float(positions.get(p["symbol"], 0.0)) * cours.get(p["symbol"], 0.0)
-                           for p in detail)
-        valeur_marche = sum(float(p["market_value"]) for p in detail)
+                           for p in reelles)
+        valeur_marche = sum(float(p["market_value"]) for p in reelles)
         ecart_valo = (abs(valeur_cache - valeur_marche) / valeur_marche) if valeur_marche else 0.0
 
         # -- controles, dans l'ordre ou trade.py les applique ---------------
@@ -653,10 +668,10 @@ class Operations:
                        if exces_credit <= tolerance_credit
                        else "il manque %.2f" % besoin_marge},
             {"nom": "Valorisation coherente",
-             "ok": ecart_valo <= 0.02 or not detail,
+             "ok": ecart_valo <= 0.02 or not reelles,
              "detail": "cache %.0f contre marche %.0f, ecart %.1f %%"
                        % (valeur_cache, valeur_marche, 100 * ecart_valo)
-                       if detail else "aucune position a valoriser"},
+                       if reelles else "aucune position a valoriser"},
             # Garde-fous du defi. Places AVANT le controle d'ordres en vol
             # parce qu'ils priment : si une limite est franchie, la question
             # n'est plus de savoir si l'envoi est propre, mais s'il doit avoir

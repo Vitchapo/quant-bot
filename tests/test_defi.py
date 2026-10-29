@@ -1,11 +1,16 @@
 """Garde-fous de perte au format prop firm."""
 from __future__ import annotations
 
+import sys
+import threading
+from pathlib import Path
+
 import pytest
 
 from quantbot.defi import (PERTE_JOUR_DEFAUT, VERROU_OBJECTIF, VERROU_PERTE,
                            est_verrouille, evaluer, lever_verrou, lire_etat,
                            marquer_solde, parametres, resume, ecrire_etat)
+from quantbot.defi import ILLISIBLE, VERROU_ILLISIBLE
 
 P = {"perte_jour_max": 0.04, "perte_totale_max": 0.08, "objectif": 0.10,
      "reference": "statique", "solder": True}
@@ -78,10 +83,97 @@ class TestEtatSurDisque:
         ecrire_etat({"capital_depart": 100000, "plus_haut": 101000}, chemin)
         assert lire_etat(chemin)["plus_haut"] == 101000
 
-    def test_fichier_corrompu_ne_leve_pas(self, tmp_path):
+    def test_fichier_corrompu_verrouille_sans_rien_ecraser(self, tmp_path):
+        """28/10/2026 : un etat lu vide devenait un defi NEUF, depart a la
+        valeur du moment, aussitot reecrit. Un fichier illisible verrouille
+        desormais - sans demander de vente - et reste tel quel."""
         chemin = tmp_path / "defi.json"
         chemin.write_text("{ ceci n'est pas du json", encoding="utf-8")
-        assert lire_etat(chemin) == {}
+        etat = lire_etat(chemin)                        # ne leve toujours pas
+        assert est_verrouille(etat) and etat["verrou"]["raison"] == VERROU_ILLISIBLE
+        assert etat[ILLISIBLE] and etat["a_solder"] is False
+        v = evaluer(96641.87, 96000, P, etat)
+        assert not v["ok"] and not v["nouveau_verrou"] and not v["a_solder"]
+        assert "illisible" in v["raison"]
+        ecrire_etat(v["etat"], chemin)
+        ecrire_etat(lever_verrou(etat), chemin)
+        assert chemin.read_text(encoding="utf-8") == "{ ceci n'est pas du json"
+
+    def test_fichier_vide_verrouille(self, tmp_path):
+        chemin = tmp_path / "defi.json"
+        chemin.write_text("", encoding="utf-8")
+        assert est_verrouille(lire_etat(chemin))
+
+    def test_fichier_absent_c_est_un_defi_neuf(self, tmp_path):
+        """Le seul chemin vers un defi neuf reste explicite : supprimer le fichier."""
+        v = evaluer(96641.87, 96000, P, lire_etat(tmp_path / "absent.json"))
+        assert v["ok"] and v["depart"] == 96641.87
+
+    def test_l_ecriture_remplace_le_fichier_d_un_coup(self, tmp_path):
+        """Un renommage, jamais une reecriture en place."""
+        chemin = tmp_path / "defi.json"
+        ecrire_etat({"capital_depart": 100000.0, "plus_haut": 100000.0}, chemin)
+        avant = chemin.stat().st_ino
+        ecrire_etat({"capital_depart": 100000.0, "plus_haut": 105503.52}, chemin)
+        assert chemin.stat().st_ino != avant
+        assert lire_etat(chemin)["plus_haut"] == 105503.52
+        assert not list(tmp_path.glob("*.tmp"))
+
+    def test_un_lecteur_ne_tombe_jamais_sur_un_fichier_vide(self, tmp_path):
+        """Le scenario du 28/10 : un fil ecrit sans arret, un autre relit."""
+        chemin = tmp_path / "defi.json"
+        ecrire_etat({"capital_depart": 100000.0, "plus_haut": 100000.0}, chemin)
+        fini = threading.Event()
+
+        def ecrivain():
+            k = 0
+            while not fini.is_set():
+                k += 1
+                ecrire_etat({"capital_depart": 100000.0, "plus_haut": 100000.0 + k}, chemin)
+
+        fil = threading.Thread(target=ecrivain)
+        fil.start()
+        try:
+            for _ in range(3000):
+                etat = lire_etat(chemin)
+                assert not est_verrouille(etat) and etat["capital_depart"] == 100000.0
+        finally:
+            fini.set()
+            fil.join()
+
+
+class TestCommandesSurEtatIllisible:
+    """`--etat-defi` et `--lever-verrou` disent ce qu'il en est, sans demander
+    de confirmation ni ecrire quoi que ce soit."""
+
+    @pytest.fixture
+    def illisible(self, tmp_path, monkeypatch):
+        from quantbot import defi
+        chemin = tmp_path / "defi.json"
+        chemin.write_text("{ abime", encoding="utf-8")
+        monkeypatch.setattr(defi, "ETAT_DEFI", chemin)
+        monkeypatch.setattr("builtins.input",
+                            lambda *a: pytest.fail("aucune confirmation ne doit etre demandee"))
+        return chemin
+
+    @staticmethod
+    def _script(nom):
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+        return __import__(nom)
+
+    def test_veille(self, illisible, base_config, capsys):
+        veille = self._script("veille_defi")
+        cfg = base_config.copy()
+        cfg.set("defi.active", True, strict=True)
+        assert veille.montrer_etat(cfg) == veille.VERROU
+        assert veille.lever(cfg) == veille.VERROU
+        assert "ILLISIBLE" in capsys.readouterr().out
+        assert illisible.read_text(encoding="utf-8") == "{ abime"
+
+    def test_coupe_circuit(self, illisible):
+        cc = self._script("coupe_circuit")
+        assert cc.lever(None) == cc.VERROU
+        assert illisible.read_text(encoding="utf-8") == "{ abime"
 
 
 class TestConfiguration:
