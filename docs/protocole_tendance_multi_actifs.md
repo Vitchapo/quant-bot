@@ -176,7 +176,69 @@ Dans le test :
 
 | fichier brut | empreinte SHA-256 | exclusion éventuelle et raison |
 |---|---|---|
-| *(étape 2)* | | |
+| `yahoo__GSPC.json` | `7a5c1cd69e2ea56e2cfef93a79992beda089265ebd8de6e6cc46381c37229ea6` | US500, source principale : retenu, aucun défaut |
+| `stooq__SPX.csv` | — | US500, repli : non téléchargé, aucun défaut à trancher |
+| `yahoo__GDAXI.json` | `3e9f9f0679ba8e62b575afc83d443d53308a9be6a61a6cba55fdf181ab309574` | GER40, source principale : retenu, aucun défaut |
+| `stooq__DAX.csv` | — | GER40, repli : non téléchargé, aucun défaut à trancher |
+| `yahoo__FTSE.json` | `c58ce686c1e5076bb8b8d2a0c9d1230a56ca72a85dc22c0951a1e35fdd9c628c` | UK100, source principale : retenu, aucun défaut |
+| `stooq__UKX.csv` | — | UK100, repli : non téléchargé, aucun défaut à trancher |
+| `yahoo__N225.json` | `ae963771e5a7ceacd30200597e714d58fc9419ce4cac3c8e3636573ae72d87c7` | JP225, source principale : retenu ; trou du 26/04/2019 au 07/05/2019 (6 jours ouvrés sans cotation), le repli ne cote pas non plus : marché fermé |
+| `stooq__NKX.csv` | `31ffd435ab10bd0eb64e5f2ee62f9884cb92843312fb8673a7ae249ead298174` | JP225, repli |
+| `yahoo__AXJO.json` | `6de236daaceeee8a54ffb4a0429155f5f915931d1d37b19d7a38d2418362efde` | AUS200, source principale : retenu, aucun défaut |
+| `stooq__AXJO.csv` | — | AUS200, repli : non téléchargé, aucun défaut à trancher |
+| `yahoo__HSI.json` | `e5e6c3e3903dbed82b9d00368e74e98ca425cb5cdc94e9c0f6e4343e05524d3b` | HK50, source principale : retenu, aucun défaut |
+| `stooq__HSI.csv` | — | HK50, repli : non téléchargé, aucun défaut à trancher |
+| `fred_DEXUSEU.csv` | `69896d0b36255eecdfb9a8be80517f1fdeadcdab5e2707f2047d585cb290c439` | EURUSD, source principale : retenu, aucun défaut |
+| `yahoo_EURUSD_X.json` | `74a9e58de8b929032d46f85b6ff8b04c5acf7ddac7ceddca95e000daaac2beca` | EURUSD, repli |
+| `fred_DEXUSUK.csv` | `9bdf3affad22a28d974d7bf184edabed7a912f4170460c2738ca93b07a10dc15` | GBPUSD, source principale : retenu ; saut du 24/06/2016 (−7,8 %, 14 écarts-types), confirmé par le repli |
+| `yahoo_GBPUSD_X.json` | `5096a4fa02a33a64dc4b4719bc432a4567ec358d32c415d800f06f1b9bf0c6db` | GBPUSD, repli |
+| `fred_DEXJPUS.csv` | `c359b1700c8175b5ca3f857439d965c022e9cc5c222e08f747760a3aa4b61155` | USDJPY, source principale : retenu, aucun défaut |
+| `yahoo_JPY_X.json` | `d661a12b30ee134f4629b7cabdee2a1e318efeda35d1200f851e7df06991c64a` | USDJPY, repli |
+| `fred_DEXSZUS.csv` | `02b28ca263021a282d401a034c18759682ca14b8d540e482a0fc80d694faa812` | USDCHF, source principale : retenu ; saut du 06/09/2011 (+9,3 %, 15 écarts-types), confirmé par le repli ; saut du 15/01/2015 (−12,2 %, 19 écarts-types), confirmé par le repli |
+| `yahoo_CHF_X.json` | `01a334b96c83d6a655626303058cb6b60389ac82e191c073ffa06344190c51a6` | USDCHF, repli |
+| `fred_DEXCAUS.csv` | `a1bf82fd07da7fcb44eb52eccb8b847811194ae136f604a0af4f360e469fc936` | USDCAD, source principale : retenu, aucun défaut |
+| `yahoo_CAD_X.json` | `2735511eb2f0f9b6d8f99c0b6380afcfaa4a0cdcb38f835089e2bff7250513ae` | USDCAD, repli |
+| `fred_DEXUSAL.csv` | `b11f9478ed64c676d2a8f0cff25cce83ad696b528a6e2ebb577874b9030a6673` | AUDUSD, source principale : retenu ; saut du 06/10/2008 (−7,9 %, 10 écarts-types), confirmé par le repli ; saut du 14/10/2008 (+8,0 %, 10 écarts-types), confirmé par le repli |
+| `yahoo_AUDUSD_X.json` | `f2e21308deae0f81c9bc1253062d04fac26053b1d05e0868e0426401c8435eae` | AUDUSD, repli |
+| `fred_DEXUSNZ.csv` | `cf7628782c7d5996fe4326a9eeaf4c50c3b4466cbc48f7bbcecf6b1dee6a5472` | NZDUSD, source principale : retenu, aucun défaut |
+| `yahoo_NZDUSD_X.json` | `15b95047abe4e6787e60fabc9bab01f05d8d9d01fbeaad75864be732d802ae70` | NZDUSD, repli |
+| `stooq_XAUUSD.csv` | `a624371ffe5e9170897965ab57a8f10aaa107fd48507262e709431ac3ff8b072` | XAUUSD, source principale : retenu, aucun défaut |
+| `yahoo_GC_F.json` | `56a5cd81b91745673a8584be8b402f32b76173a1032a2fd2f329ea0b328ee9da` | XAUUSD, repli |
+| `stooq_XAGUSD.csv` | `49b6bb0aa359bc7b189a596c07054dfc7d8d0a4932f5a4bf229bd6c38d41356e` | XAGUSD, source principale : retenu ; saut du 30/01/2026 (−28,0 %, 14 écarts-types), confirmé par le repli |
+| `yahoo_SI_F.json` | `983f02e170c7c42e69f0f0b77ec906e35d3a91a6860ee68abaa418917919ed00` | XAGUSD, repli |
+| `bri_US.csv` | `8187d3e30033003f29bdffee13bd61c2605640ca5ebb65bc5fd0c4729f3fa7f6` | taux directeur américain ; sert aussi à Hong Kong (monnaie arrimée au dollar) |
+| `bri_XM.csv` | `a60d9acb21dff6b4028e01123783be837586cdcb82351b6f49268d30672f2cbd` | taux directeur de la zone euro, à partir de 1999 |
+| `bri_DE.csv` | `a0b9897ddae8f001a2652bb33f7eda9ad8d358ca3a3c6f5036cb357617aa87d0` | taux directeur allemand, pour 1998 (avant l'euro) |
+| `bri_GB.csv` | `72065704f8a551b31663cdafb532aba29827216df1d60a4985badd1d76644558` | taux directeur britannique |
+| `bri_JP.csv` | `7c17d885f1b05aa243c2585eba5665b7bf73bfc42a9a765e45ccd8319e92d5d9` | taux directeur japonais |
+| `bri_CH.csv` | `c9ab75197a76434eab6ce2aaada5c76e023a66437c2eb41b045496385fec01eb` | taux directeur suisse |
+| `bri_CA.csv` | `79189fdf439d9e6e04b492a99dff1f881552b3448a5e2690d58bafec57a5f3db` | taux directeur canadien |
+| `bri_AU.csv` | `677b45addcfd835f189e23adaa6c8ed107d9a8c915a7c95ff4b6715e81632026` | taux directeur australien |
+| `bri_NZ.csv` | `0863a2141269bec5d1bf5f76dd76a23165dc1b9028062844336e2fc47a0d3721` | taux directeur néo-zélandais |
+
+Relevé du 30 octobre 2026 par `scripts/donnees_tendance.py`. Les fichiers
+bruts sont dans `data/tendance/brut/` (hors du dépôt), leurs empreintes dans
+`data/tendance/manifeste.csv`. **Aucun instrument n'est exclu.** Les six sauts
+signalés sont des événements connus : le Brexit, le plancher de la Banque
+nationale suisse puis sa levée, la crise d'octobre 2008 et la chute de
+l'argent du 30 janvier 2026. Le trou de JP225 est la Golden Week de 2019 :
+dix jours de fermeture pour l'avènement de l'empereur Naruhito.
+
+- **Comment le repli confirme un saut.** Il doit bouger dans le même sens,
+  d'au moins la moitié, entre les mêmes dates ou à une ou deux séances près.
+  Les sources ne relèvent pas leurs cours à la même heure : FRED prend le
+  cours de midi à New York, et Yahoo date ses barres de change autrement.
+  Cette tolérance a été fixée **après** avoir vu le cas de GBPUSD. Entre les
+  mêmes dates seulement, le Brexit n'était pas confirmé, car la clôture Yahoo
+  du 24/06/2016 est fausse (1,4558, pour un plus bas du jour à 1,3239) : GBPUSD
+  aurait été exclu. La règle vaut pour tous les instruments et a été fixée
+  avant tout calcul de la stratégie. Un cours aberrant n'est confirmé dans
+  aucune fenêtre, ce que vérifie un test sur données fabriquées.
+- **Stooq** exige depuis mars 2026 une clé et une vérification du navigateur.
+  Ses trois fichiers nécessaires (`^nkx`, `xauusd`, `xagusd`) ont été
+  téléchargés à la main le 30 octobre 2026, puis recopiés tels quels. Les
+  replis Stooq des cinq autres indices n'ont pas été téléchargés : ils
+  n'avaient aucun défaut à trancher.
 
 ---
 
@@ -286,9 +348,9 @@ réussit à peu près une fois sur deux.
 
 | # | étape | fait le |
 |---|---|---|
-| 0 | relire, valider, committer et pousser ce protocole | |
+| 0 | relire, valider, committer et pousser ce protocole | 27 octobre 2026 (`f0afabb`) |
 | 1 | relever les conditions FTMO dans MT5, remplir le tableau des coûts, committer | |
-| 2 | télécharger et contrôler les données, consigner empreintes et exclusions, committer | |
-| 3 | écrire le code et ses tests sur données synthétiques : sans signal, aucun avantage ; avec une tendance implantée, les critères la détectent ; modifier les cours futurs ne change aucune position passée | |
+| 2 | télécharger et contrôler les données, consigner empreintes et exclusions, committer | 30 octobre 2026 |
+| 3 | écrire le code et ses tests sur données synthétiques : sans signal, aucun avantage ; avec une tendance implantée, les critères la détectent ; modifier les cours futurs ne change aucune position passée | 30 octobre 2026 (`5b0b596`) |
 | 4 | lancer le test **une seule fois**, remplir la colonne « résultat », committer la sortie brute | |
 | 5 | appliquer la décision | |
