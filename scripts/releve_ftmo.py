@@ -39,6 +39,7 @@ import os
 import statistics
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -55,6 +56,7 @@ INSTRUMENTS = ["US500", "GER40", "UK100", "JP225", "AUS200", "HK50",
                "EURUSD", "GBPUSD", "USDJPY", "USDCHF", "USDCAD", "AUDUSD", "NZDUSD",
                "XAUUSD", "XAGUSD"]
 FRAICHEUR_S = 120            # une cotation plus vieille : marche ferme
+ATTENTE_S, PAS_S = 10.0, 0.5 # attente de la premiere cotation d'un symbole
 JOURS_VOULUS = 3
 #: SYMBOL_SWAP_MODE de MetaTrader 5 : l'unite des swaps.
 MODES_SWAP = {0: "desactive", 1: "points", 2: "devise de base", 3: "devise de marge",
@@ -78,18 +80,38 @@ def _num(objet, champ, defaut=None):
         return defaut
 
 
-def releve(mt5, carte: dict, maintenant: datetime = None) -> list:
+def attendre_cotations(mt5, symboles: list, attendre=time.sleep) -> bool:
+    """Attend la premiere cotation des symboles tout juste selectionnes.
+
+    Un symbole qui entre dans la liste du terminal n'a pas encore de
+    cotation (heure 0) : elle arrive en une a quelques secondes. Le premier
+    releve, le 30/10, a lu des zeros pour les six indices et les deux metaux.
+    Au bout de ATTENTE_S, on releve quand meme : ce qui n'a pas de cotation
+    est compte ferme.
+    """
+    for _ in range(int(ATTENTE_S / PAS_S)):
+        ticks = [mt5.symbol_info_tick(s) for s in symboles]
+        if all(t is not None and _num(t, "time", 0.0) > 0 for t in ticks):
+            return True
+        attendre(PAS_S)
+    return False
+
+
+def releve(mt5, carte: dict, maintenant: datetime = None, attendre=time.sleep) -> list:
     """Un releve : une ligne par instrument trouve au catalogue."""
+    symboles = [carte[n] for n in INSTRUMENTS if carte.get(n)]
+    for sym in symboles:
+        try:
+            mt5.symbol_select(sym, True)          # sans cela, pas de cotation
+        except Exception:
+            pass
+    attendre_cotations(mt5, symboles, attendre)
     maintenant = maintenant or datetime.now(timezone.utc)
     lignes = []
     for nom in INSTRUMENTS:
         sym = carte.get(nom)
         if not sym:
             continue
-        try:
-            mt5.symbol_select(sym, True)          # sans cela, pas de cotation
-        except Exception:
-            pass
         info = mt5.symbol_info(sym)
         tick = mt5.symbol_info_tick(sym)
         if info is None or tick is None:

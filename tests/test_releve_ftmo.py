@@ -54,6 +54,31 @@ class FauxTerminal(FauxMT5):
         return _Obj(bid=p * 0.9999, ask=p * 1.0001, last=p, time=heure)
 
 
+class TerminalLent(FauxTerminal):
+    """Comme le vrai terminal : un indice ou un metal tout juste selectionne
+    n'a pas encore de cotation (heure 0) pendant quelques appels."""
+
+    def __init__(self, maintenant, retard, **kw):
+        super().__init__(maintenant, **kw)
+        self.retard, self.appels = retard, {}
+
+    def symbol_info_tick(self, nom):
+        n = self.appels[nom] = self.appels.get(nom, 0) + 1
+        if (nom.endswith(".cash") or nom.startswith("XA")) and n <= self.retard:
+            return _Obj(bid=0.0, ask=0.0, last=0.0, time=0)
+        return super().symbol_info_tick(nom)
+
+
+def _lire_lent(retard):
+    t = datetime(2026, 11, 2, 14, 0, tzinfo=timezone.utc)
+    faux = TerminalLent(t, retard)
+    api = mt5broker.MT5(mt5=faux)
+    api.initialiser()
+    carte = api.construire_carte(R.INSTRUMENTS)
+    pauses = []
+    return R.releve(faux, carte, t, attendre=pauses.append), pauses
+
+
 def _lire(maintenant, ages=None):
     faux = FauxTerminal(maintenant, ages)
     api = mt5broker.MT5(mt5=faux)
@@ -80,6 +105,20 @@ def test_un_marche_sans_cotation_recente_est_ferme():
     ouverts = {x["instrument"] for x in lignes if x["ouvert"]}
     assert "JP225" not in ouverts and "HK50" not in ouverts and "AUS200" not in ouverts
     assert {"US500", "GER40", "EURUSD", "XAUUSD"} <= ouverts
+
+
+def test_le_releve_attend_la_premiere_cotation_d_un_symbole_tout_juste_selectionne():
+    """Le releve du 30/10 a lu des zeros pour les indices et les metaux."""
+    lignes, pauses = _lire_lent(retard=3)
+    assert len(pauses) == 3
+    assert len(lignes) == 15 and all(l["ouvert"] and l["ask"] > 0 for l in lignes)
+
+
+def test_sans_cotation_le_releve_finit_par_renoncer():
+    lignes, pauses = _lire_lent(retard=10 ** 6)
+    assert len(pauses) == R.ATTENTE_S / R.PAS_S
+    fermes = {l["instrument"] for l in lignes if not l["ouvert"]}
+    assert fermes == {"US500", "GER40", "UK100", "JP225", "AUS200", "HK50", "XAUUSD", "XAGUSD"}
 
 
 def test_le_week_end_tout_est_ferme():
