@@ -99,7 +99,7 @@ header .spacer { flex: 1 1 auto; }
   border: 1px solid var(--border); color: var(--ink-2); white-space: nowrap;
 }
 .layout { display: grid; grid-template-columns: 288px minmax(0, 1fr); gap: 20px; padding: 20px 24px 56px; }
-@media (max-width: 900px) { .layout { grid-template-columns: 1fr; } }
+@media (max-width: 900px) { .layout { grid-template-columns: minmax(0, 1fr); } }
 
 aside {
   align-self: start; position: sticky; top: 16px;
@@ -114,6 +114,7 @@ aside h2 {
 .field { margin-bottom: 11px; }
 .field label { display: flex; justify-content: space-between; gap: 8px; font-size: 12.5px; color: var(--ink-2); margin-bottom: 3px; }
 .field label b { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
+.field label.switch { justify-content: flex-start; }
 .field input[type=range] { width: 100%; margin: 0; accent-color: var(--series-1); }
 .field select, .field input[type=number] {
   width: 100%; padding: 5px 7px; font: inherit; font-size: 13px;
@@ -238,7 +239,7 @@ details.plus[open] > summary::before { content: "▾ "; }
 details.plus p { color: var(--ink-2); font-size: 12.5px; max-width: 76ch; margin: 8px 0 0; }
 
 /* --- Glossaire ----------------------------------------------------------- */
-.glossaire { display: grid; grid-template-columns: repeat(auto-fill, minmax(288px, 1fr)); gap: 14px 26px; }
+.glossaire { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(288px, 100%), 1fr)); gap: 14px 26px; }
 .glossaire dt { font-weight: 600; font-size: 13px; }
 .glossaire dd { margin: 3px 0 0; color: var(--ink-2); font-size: 12.5px; line-height: 1.5; }
 .glossaire div { break-inside: avoid; }
@@ -328,6 +329,53 @@ button.danger:hover { filter: brightness(1.08); }
 .dom-ligne .m { color: var(--ink-2); font-variant-numeric: tabular-nums; text-align: right; }
 .dom-ligne .tk { grid-column: 2 / -1; color: var(--muted); font-size: 11.5px; line-height: 1.35; }
 .dom-source { font-size: 11.5px; color: var(--muted); margin-top: 8px; max-width: 560px; }
+
+/* -- Petits ecrans -----------------------------------------------------------
+   Sous 900 px : une colonne, et les reglages replies derriere un bouton. Ils
+   restaient colles en haut de l'ecran et couvraient les deux tiers des
+   resultats pendant qu'on faisait defiler la page. Sous 640 px (telephone) :
+   marges serrees, en-tete sur trois lignes, tableaux qui defilent dans leur
+   carte au lieu d'elargir la page. Les graphiques s'adaptent d'eux-memes
+   (voir `etroit` dans le script). */
+.reglages-bascule { display: none; }
+.defile { overflow-x: auto; }
+details.tv .defile { overflow: visible; }   /* sa boite defile deja, dans les deux sens */
+@media (max-width: 900px) {
+  aside { position: static; max-height: none; overflow: visible; }
+  .reglages-bascule { display: flex; width: 100%; justify-content: space-between;
+    align-items: center; margin: 10px 0 0; font-weight: 600; }
+  .reglages-bascule::after { content: "▾"; color: var(--muted); font-weight: 400; }
+  aside.ouvert .reglages-bascule::after { content: "▴"; }
+  aside:not(.ouvert) .reglages-corps { display: none; }
+}
+@media (max-width: 640px) {
+  header { padding: 12px 14px 10px; gap: 8px 10px; }
+  header h1 { font-size: 15.5px; order: -2; flex: 1 1 auto; }
+  #theme { order: -1; }
+  header .sub { flex-basis: 100%; font-size: 12px; }
+  /* La periode du backtest se lit deja sur les axes des graphiques. */
+  header .spacer, header .badge.avance, header .badge.periode { display: none; }
+  .niveau button { padding: 7px 12px; }
+  .layout { padding: 12px 10px 40px; gap: 12px; }
+  .card { padding: 14px 13px 15px; margin-bottom: 14px; }
+  /* Le titre et sa phrase d'abord, le bouton dessous : cote a cote, le
+     titre etait tasse dans la moitie de la carte. */
+  .card .head { flex-wrap: wrap; gap: 10px; }
+  .card .head > :first-child { flex: 1 1 100% !important; }
+  .card .head .spacer { display: none; }
+  .card .head > :not(:first-child) { margin-bottom: 12px; }
+  .resume .titre { font-size: 17px; }
+  .tiles { gap: 8px; margin-bottom: 14px; }
+  .tile { padding: 10px 11px; }
+  .tile .k { font-size: 10.5px; }
+  .tile .v { font-size: 20px; }
+  th, td { padding: 5px 7px; }
+  td { white-space: nowrap; }
+  /* Sous 16 px, iOS zoome sur la page a chaque fois qu'on touche le champ. */
+  select, input[type=number] { font-size: 16px; }
+  footer { padding: 0 14px 32px; }
+}
+@media (max-width: 340px) { .tiles { grid-template-columns: minmax(0, 1fr); } }
 """
 
 
@@ -393,7 +441,9 @@ function drawLines(cv, tip, opt) {
   const S = surface(cv, opt.height || 300), ctx = S.ctx;
   const series = opt.series.filter(function (s) { return s.values && s.values.length; });
   if (!series.length) return;
-  const padL = 52, padR = opt.labels === false ? 16 : 104, padT = 10, padB = 26;
+  const serre = etroit(S);
+  const padL = serre ? 46 : 52, padR = opt.labels === false ? (serre ? 10 : 16) : (serre ? 92 : 104),
+        padT = 10, padB = 26;
   const x0 = padL, x1 = S.w - padR, y0 = padT, y1 = S.h - padB;
   const n = opt.dates.length;
   const clean = function (v) { return v !== null && v !== undefined && isFinite(v); };
@@ -425,7 +475,10 @@ function drawLines(cv, tip, opt) {
   ctx.textAlign = "center"; ctx.textBaseline = "top";
   const years = [];
   for (let i = 0; i < n; i++) { const y = opt.dates[i].slice(0, 4); if (!years.length || years[years.length - 1].y !== y) years.push({ y: y, i: i }); }
-  const stride = Math.max(1, Math.ceil(years.length / 9));
+  // Au plus neuf annees, jamais a moins de 44 px l'une de l'autre : sur un
+  // telephone, neuf libelles de quatre chiffres se chevauchaient.
+  const stride = Math.max(1, Math.ceil(years.length /
+                                       Math.min(9, Math.max(2, Math.floor((x1 - x0) / 44)))));
   for (let k = 0; k < years.length; k += stride) {
     const p = Math.round(tx(years[k].i)) + 0.5;
     ctx.strokeStyle = cssVar("--grid");
@@ -482,7 +535,11 @@ function drawLines(cv, tip, opt) {
       ctx.fillStyle = it.color;
       ctx.fillRect(x1 + 5, it.y - 1.5, 9, 3);
       ctx.fillStyle = cssVar("--ink-2");
-      ctx.fillText(it.name, x1 + 18, it.y);
+      // "univers entier" devient "univers" si la marge ne le contient pas :
+      // la legende au-dessus du graphique donne le nom complet.
+      ctx.fillText(ajuster(ctx, [it.name, it.name.split(" ")[0]], S.w - x1 - 20, POLICE)[0],
+                   x1 + 18, it.y);
+      ctx.font = POLICE;
     }
   }
 
@@ -510,10 +567,7 @@ function drawLines(cv, tip, opt) {
     tip.style.top = Math.max(4, Math.min(ev.clientY - r.top - 12, S.h - tip.offsetHeight - 4)) + "px";
   }
   function leave() { state.i = -1; tip.style.opacity = 0; drawLines(cv, null, Object.assign({}, opt, { _cross: -1 })); }
-  if (tip) {
-    cv.onmousemove = hover; cv.onmouseleave = leave;
-    cv.onpointerdown = hover;
-  }
+  if (tip) brancher(cv, hover, leave);
   if (opt._cross !== undefined && opt._cross >= 0) {
     const i = opt._cross, X = Math.round(tx(i)) + 0.5;
     ctx.strokeStyle = cssVar("--axis"); ctx.lineWidth = 1;
@@ -531,10 +585,6 @@ function drawLines(cv, tip, opt) {
 // Cascade (decomposition)
 // ---------------------------------------------------------------------------
 function drawWaterfall(cv, tip, steps) {
-  const S = surface(cv, 260), ctx = S.ctx;
-  if (!steps.length) return;
-  const padL = 52, padR = 12, padT = 14, padB = 62;
-  const x0 = padL, x1 = S.w - padR, y0 = padT, y1 = S.h - padB;
   let lo = 0, hi = 0, cum = 0;
   const bars = [];
   for (const s of steps) {
@@ -543,6 +593,13 @@ function drawWaterfall(cv, tip, steps) {
     lo = Math.min(lo, bars[bars.length - 1].lo); hi = Math.max(hi, bars[bars.length - 1].hi);
   }
   const pad = (hi - lo) * 0.12 || 0.01; lo -= pad; hi += pad;
+  // Telephone : six libelles longs ne tiennent pas sous six barres de 45 px.
+  // La cascade se couche, une ligne par etape (voir cascadeCouchee).
+  if (steps.length && cv.parentElement.clientWidth < 560) { cascadeCouchee(cv, bars, lo, hi); return; }
+  const S = surface(cv, 260), ctx = S.ctx;
+  if (!steps.length) return;
+  const padL = 52, padR = 12, padT = 14, padB = 62;
+  const x0 = padL, x1 = S.w - padR, y0 = padT, y1 = S.h - padB;
   const ty = function (v) { return y1 - (v - lo) / (hi - lo) * (y1 - y0); };
   ctx.strokeStyle = cssVar("--grid"); ctx.fillStyle = cssVar("--muted");
   ctx.textAlign = "right"; ctx.textBaseline = "middle";
@@ -577,6 +634,54 @@ function drawWaterfall(cv, tip, steps) {
       else line = test;
     }
     if (ln <= 2) ctx.fillText(line, cx, y1 + 8 + ln * 13);
+  });
+}
+
+// La cascade des petits ecrans : memes barres, memes couleurs, l'axe des
+// rendements a l'horizontale. Une ligne par etape, son libelle ENTIER au-dessus
+// de sa barre, la valeur au bout de la barre, jamais dedans.
+function cascadeCouchee(cv, bars, lo, hi) {
+  const H = 42, padT = 2, padB = 22;
+  const S = surface(cv, padT + bars.length * H + padB), ctx = S.ctx;
+  const valeurs = bars.map(function (b) { return b.kind === "total" ? fmtPct(b.v, 2) : fmtSigned(b.v, 2); });
+  ctx.font = POLICE_FORTE;
+  let large = 0;
+  for (const t of valeurs) large = Math.max(large, ctx.measureText(t).width);
+  ctx.font = POLICE;
+  // A droite, une marge pour la valeur de la barre qui va le plus loin.
+  const x0 = 4, x1 = S.w - 10 - Math.ceil(large), y1 = S.h - padB;
+  const tx = function (v) { return x0 + (v - lo) / (hi - lo) * (x1 - x0); };
+  const ticks = niceTicks(lo, hi, 4), pas = ticks.length > 1 ? ticks[1] - ticks[0] : 0.01;
+  ctx.lineWidth = 1; ctx.textAlign = "center"; ctx.textBaseline = "top";
+  for (const t of ticks) {
+    const X = Math.round(tx(t)) + 0.5;
+    ctx.strokeStyle = cssVar(Math.abs(t) < 1e-12 ? "--axis" : "--grid");
+    ctx.beginPath(); ctx.moveTo(X, padT); ctx.lineTo(X, y1); ctx.stroke();
+    ctx.fillStyle = cssVar("--muted"); ctx.fillText(fmtPct(t, pas < 0.00999 ? 1 : 0), X, y1 + 6);
+  }
+  // Un texte pose sur le fond de la carte : la grille ne le traverse pas.
+  const fond = cssVar("--surface");
+  const ecrire = function (t, x, y, aDroite) {
+    const w = ctx.measureText(t).width, encre = ctx.fillStyle;
+    ctx.fillStyle = fond; ctx.fillRect((aDroite ? x : x - w) - 2, y - 7, w + 4, 14);
+    ctx.fillStyle = encre; ctx.textAlign = aDroite ? "left" : "right"; ctx.fillText(t, x, y);
+  };
+  const colors = { pos: cssVar("--pos"), neg: cssVar("--neg"), total: cssVar("--neutral-bar") };
+  ctx.textBaseline = "middle";
+  bars.forEach(function (b, k) {
+    const y = padT + k * H, g = tx(b.lo), d = tx(b.hi), yb = y + 20, hb = 14;
+    ctx.fillStyle = cssVar("--ink-2");
+    ecrire(ajuster(ctx, b.label, S.w - 8, POLICE)[0], x0, y + 10, true);
+    ctx.font = POLICE;
+    ctx.fillStyle = colors[b.kind];
+    if (ctx.roundRect) { ctx.beginPath(); ctx.roundRect(g, yb, Math.max(d - g, 2), hb, 3); ctx.fill(); }
+    else ctx.fillRect(g, yb, Math.max(d - g, 2), hb);
+    // La valeur du cote ou l'etape avance ; de l'autre cote si elle n'y tient pas.
+    ctx.font = POLICE_FORTE; ctx.fillStyle = cssVar("--ink");
+    const w = ctx.measureText(valeurs[k]).width;
+    const droite = b.v >= 0 ? d + 6 + w <= S.w - 2 : g - 6 - w < 2;
+    ecrire(valeurs[k], droite ? d + 6 : g - 6, yb + hb / 2, droite);
+    ctx.font = POLICE;
   });
 }
 
@@ -626,15 +731,26 @@ function drawHist(cv, values, real, realLabel) {
 function drawTBars(cv, items) {
   const S = surface(cv, Math.max(90, 30 + items.length * 30)), ctx = S.ctx;
   if (!items.length) return;
-  const padL = 150, padR = 22, padT = 8, padB = 22;
+  const serre = etroit(S);
+  const padL = serre ? Math.min(150, Math.round(S.w * 0.36)) : 150, padR = 22, padT = 8, padB = 22;
   const x0 = padL, x1 = S.w - padR, y0 = padT, y1 = S.h - padB;
-  const span = Math.max(2.6, Math.max.apply(null, items.map(function (d) { return Math.abs(d.t); })) * 1.25);
+  // Etroit : plus de champ au bout de la plus longue barre, pour que son
+  // "t = 4,12" tienne dans le cadre.
+  const span = Math.max(2.6, Math.max.apply(null, items.map(function (d) { return Math.abs(d.t); })) *
+                             (serre ? 1.6 : 1.25));
   const tx = function (v) { return x0 + (v + span) / (2 * span) * (x1 - x0); };
   ctx.strokeStyle = cssVar("--grid");
   for (const t of [-2, 2]) { const X = Math.round(tx(t)) + 0.5; ctx.beginPath(); ctx.moveTo(X, y0); ctx.lineTo(X, y1); ctx.stroke(); }
   ctx.fillStyle = cssVar("--muted"); ctx.textAlign = "center"; ctx.textBaseline = "top";
-  ctx.fillText("-2", tx(-2), y1 + 5); ctx.fillText("+2", tx(2), y1 + 5);
-  ctx.fillText("seuil de credibilite  |t| = 2", (x0 + x1) / 2, y1 + 5);
+  // La legende entre les deux seuils quand elle y tient. Avec des t tres
+  // grands, les seuils se serrent autour de zero : elle passe a droite (ou a
+  // gauche), et les "-2" / "+2" ne s'ecrivent plus l'un sur l'autre.
+  const xm = tx(-2), xp = tx(2), legende = serre ? "seuil |t| = 2" : "seuil de credibilite  |t| = 2";
+  const lw = ctx.measureText(legende).width, ew = ctx.measureText("+2").width;
+  if (xp - xm >= ew + 8) { ctx.fillText("-2", xm, y1 + 5); ctx.fillText("+2", xp, y1 + 5); }
+  if (xp - xm >= lw + ew + 4) ctx.fillText(legende, (x0 + x1) / 2, y1 + 5);
+  else if (x1 - lw >= xp + ew / 2 + 8) { ctx.textAlign = "right"; ctx.fillText(legende, x1, y1 + 5); }
+  else if (x0 + lw <= xm - ew / 2 - 8) { ctx.textAlign = "left"; ctx.fillText(legende, x0, y1 + 5); }
   const zero = Math.round(tx(0)) + 0.5;
   ctx.strokeStyle = cssVar("--axis"); ctx.beginPath(); ctx.moveTo(zero, y0); ctx.lineTo(zero, y1); ctx.stroke();
   const slot = (y1 - y0) / items.length, bh = Math.min(slot - 10, 15);
@@ -645,7 +761,8 @@ function drawTBars(cv, items) {
     if (ctx.roundRect) { ctx.beginPath(); ctx.roundRect(a, cy - bh / 2, w, bh, 3); ctx.fill(); }
     else ctx.fillRect(a, cy - bh / 2, w, bh);
     ctx.fillStyle = cssVar("--ink-2"); ctx.textAlign = "right"; ctx.textBaseline = "middle";
-    ctx.fillText(d.label, x0 - 10, cy);
+    ctx.fillText(serre ? ajuster(ctx, d.label, x0 - 14, POLICE)[0] : d.label, x0 - 10, cy);
+    ctx.font = POLICE;
     ctx.fillStyle = cssVar("--ink"); ctx.textAlign = d.t >= 0 ? "left" : "right";
     ctx.fillText("t = " + fmtNum(d.t), tx(d.t) + (d.t >= 0 ? 7 : -7), cy);
   });
@@ -660,9 +777,12 @@ function drawDeciles(cv, d) {
   const S = surface(cv, 250), ctx = S.ctx;
   const items = d.deciles.map(function (x) { return { label: String(x.rang), v: x.ecart, t: x.t_stat }; });
   items.push({ gap: true });
-  items.push({ label: "top " + d.top_n, v: d.meilleurs.ecart, t: d.meilleurs.t_stat, fort: true });
-  items.push({ label: "pires " + d.top_n, v: d.pires.ecart, t: d.pires.t_stat, fort: true });
-  const padL = 56, padR = 14, padT = 16, padB = 46;
+  items.push({ label: "top " + d.top_n, court: "top", v: d.meilleurs.ecart, t: d.meilleurs.t_stat, fort: true });
+  items.push({ label: "pires " + d.top_n, court: "pires", v: d.pires.ecart, t: d.pires.t_stat, fort: true });
+  // Telephone : treize barres dans 290 px, 22 px chacune. "top 20" et
+  // "pires 20" se chevauchaient, et deux "t 3,4" voisins aussi.
+  const serre = etroit(S), P10 = POLICE.replace("11px", "10px");
+  const padL = serre ? 52 : 56, padR = serre ? 6 : 14, padT = 16, padB = serre ? 56 : 46;
   const x0 = padL, x1 = S.w - padR, y0 = padT, y1 = S.h - padB;
   const vals = items.filter(function (i) { return !i.gap; }).map(function (i) { return i.v; });
   let lo = Math.min.apply(null, vals.concat([0])), hi = Math.max.apply(null, vals.concat([0]));
@@ -696,14 +816,21 @@ function drawDeciles(cv, d) {
     if (Math.abs(it.t) > 2) {
       ctx.fillStyle = cssVar("--ink"); ctx.textAlign = "center";
       ctx.textBaseline = it.v >= 0 ? "bottom" : "top";
-      ctx.fillText("t " + fmtNum(it.t, 1), cx, it.v >= 0 ? top - 4 : bot + 4);
+      if (serre) ctx.font = P10;
+      ctx.fillText((serre ? "" : "t ") + fmtNum(it.t, 1), cx, it.v >= 0 ? top - 4 : bot + 4);
+      ctx.font = POLICE;
     }
     ctx.fillStyle = it.fort ? cssVar("--ink-2") : cssVar("--muted");
     ctx.textAlign = "center"; ctx.textBaseline = "top";
-    ctx.fillText(it.label, cx, y1 + 8);
+    if (serre && it.court) ctx.font = P10;
+    ctx.fillText(serre && it.court ? it.court : it.label, cx, y1 + 8);
+    ctx.font = POLICE;
   });
   ctx.fillStyle = cssVar("--muted"); ctx.textAlign = "left"; ctx.textBaseline = "top";
-  ctx.fillText("deciles de score : 1 = pires, " + d.n_buckets + " = meilleurs", x0, y1 + 26);
+  if (serre) {
+    ctx.fillText("1 = pires, " + d.n_buckets + " = meilleurs", x0, y1 + 26);
+    ctx.fillText("top / pires = " + d.top_n + " titres · chiffre = t", x0, y1 + 40);
+  } else ctx.fillText("deciles de score : 1 = pires, " + d.n_buckets + " = meilleurs", x0, y1 + 26);
 }
 
 // ---------------------------------------------------------------------------
@@ -715,6 +842,23 @@ const MOIS_LONGS = ["janvier", "fevrier", "mars", "avril", "mai", "juin",
                     "juillet", "aout", "septembre", "octobre", "novembre", "decembre"];
 const POLICE = "11px system-ui, -apple-system, 'Segoe UI', sans-serif";
 const POLICE_FORTE = "600 11px system-ui, -apple-system, 'Segoe UI', sans-serif";
+// Petits ecrans (telephone) : sous 560 px de large, un graphique resserre ses
+// marges et raccourcit ses libelles plutot que de les faire se chevaucher.
+function etroit(S) { return S.w < 560; }
+// Le libelle le plus complet qui tient dans `largeur` px : le texte entier en
+// 11 px puis en 10 px, puis sa variante courte de meme ; a defaut, la derniere
+// variante tronquee. Rend [texte, police], la police deja posee sur `ctx`.
+function ajuster(ctx, textes, largeur, police) {
+  const liste = (Array.isArray(textes) ? textes : [textes]).filter(function (t) { return t; });
+  const p11 = police || POLICE, p10 = p11.replace("11px", "10px");
+  for (const t of liste) for (const p of [p11, p10]) {
+    ctx.font = p;
+    if (ctx.measureText(t).width <= largeur) return [t, p];
+  }
+  let t = liste.length ? liste[liste.length - 1] : "";
+  while (t.length > 1 && ctx.measureText(t + "…").width > largeur) t = t.slice(0, -1);
+  return [t + "…", p10];
+}
 function propre(v) { return v !== null && v !== undefined && isFinite(v); }
 function jourCourt(d) { return d.slice(8, 10) + "/" + d.slice(5, 7); }
 function jourLong(d) {
@@ -766,6 +910,30 @@ function tipPoser(tip, S, x, y) {
   tip.style.top = Math.max(4, Math.min(y - 12, S.h - th - 4)) + "px";
 }
 function tipCacher(tip) { if (tip) tip.style.opacity = 0; }
+
+// Survol a la souris, toucher au doigt. Apres un toucher, le navigateur peut
+// envoyer un "mouseleave" dans la foulee : ignore pendant 700 ms, sinon
+// l'infobulle se refermait aussitot ouverte. Toucher ailleurs la referme.
+let dernierToucher = 0;
+const ouvertesAuDoigt = new Map();     // canevas -> sa fonction "quitter"
+document.addEventListener("pointerdown", function (ev) {
+  if (ev.pointerType !== "touch") return;
+  dernierToucher = Date.now();
+  ouvertesAuDoigt.forEach(function (quitter, cv) {
+    if (cv !== ev.target) { ouvertesAuDoigt.delete(cv); quitter(); }
+  });
+}, true);
+function brancher(cv, survol, quitter) {
+  cv.onmousemove = survol;
+  cv.onpointerdown = function (ev) {
+    survol(ev);
+    if (ev.pointerType === "touch") ouvertesAuDoigt.set(cv, quitter);
+  };
+  cv.onmouseleave = function () {
+    if (Date.now() - dernierToucher < 700) return;
+    ouvertesAuDoigt.delete(cv); quitter();
+  };
+}
 // Legende en DOM : meme regle que l'infobulle, jamais de nom dans innerHTML.
 function legendeDom(hote, items) {
   const cle = JSON.stringify(items);
@@ -783,6 +951,9 @@ function legendeDom(hote, items) {
 // tranche de meme largeur, au meme endroit dans les deux. La barre du jour
 // tombe donc exactement a l'aplomb de son point sur la courbe du dessus.
 function geoSeances(S, n, padL, padR, padT, padB) {
+  // Telephone : la marge des etiquettes de droite passe de 128 a 104 px, et
+  // `etiquettesDroite` raccourcit ce qui n'y tient plus.
+  if (etroit(S)) padR = Math.min(padR, 104);
   const x0 = padL, x1 = S.w - padR, y0 = padT, y1 = S.h - padB;
   const pas = (x1 - x0) / Math.max(n, 1);
   return { x0: x0, x1: x1, y0: y0, y1: y1, pas: pas,
@@ -857,9 +1028,12 @@ function etiquettesDroite(ctx, items, x1, y0, y1) {
       if (it.seuil) ctx.setLineDash([3, 2]);
       ctx.beginPath(); ctx.moveTo(x1 + 6, it.y); ctx.lineTo(x1 + 16, it.y); ctx.stroke(); ctx.restore();
     }
-    ctx.font = it.fort ? POLICE_FORTE : POLICE;
+    // Ce qui ne tient pas dans la marge passe en 10 px, puis a sa variante
+    // courte (`court`) : jamais un libelle rogne par le bord du graphique.
+    const a = ajuster(ctx, [it.texte, it.court], ctx.canvas.clientWidth - x1 - 23,
+                      it.fort ? POLICE_FORTE : POLICE);
     ctx.fillStyle = cssVar(it.fort ? "--ink" : "--ink-2");
-    ctx.fillText(it.texte, x1 + 21, it.y);
+    ctx.fillText(a[0], x1 + 21, it.y);
   }
   ctx.font = POLICE;
 }
@@ -1021,13 +1195,15 @@ function drawDefi(cv, tip, D, croix) {
   if (D.indiceNom) {
     courbe(D.indice, cI);
     const ii = dernier(D.indice);
-    if (ii >= 0) labels.push({ y: ty(D.indice[ii]), texte: D.indiceNom + " " + fmtSigned(D.indice[ii], 2), couleur: cI });
+    if (ii >= 0) labels.push({ y: ty(D.indice[ii]), texte: D.indiceNom + " " + fmtSigned(D.indice[ii], 2),
+                               court: fmtSigned(D.indice[ii], 2), couleur: cI });
   }
   courbe(D.compte, cC);
   const ic = dernier(D.compte);
   if (ic >= 0) {
     point(ctx, tx(ic), ty(D.compte[ic]), cC);
-    labels.push({ y: ty(D.compte[ic]), texte: "compte " + fmtSigned(D.compte[ic], 2), couleur: cC, fort: true });
+    labels.push({ y: ty(D.compte[ic]), texte: "compte " + fmtSigned(D.compte[ic], 2),
+                  court: fmtSigned(D.compte[ic], 2), couleur: cC, fort: true });
   }
   etiquettesDroite(ctx, labels, x1, y0, y1);
 
@@ -1058,7 +1234,7 @@ function drawDefi(cv, tip, D, croix) {
     tipRemplir(tip, jourLong(D.dates[i]), L);
     tipPoser(tip, S, tx(i), ev.clientY - r.top);
   };
-  cv.onmousemove = survol; cv.onmouseleave = quitter; cv.onpointerdown = survol;
+  brancher(cv, survol, quitter);
 }
 
 // ---------------------------------------------------------------------------
@@ -1117,7 +1293,7 @@ function drawJour(cv, tip, D, survolee) {
     tipRemplir(tip, jourLong(D.dates[i]), L);
     tipPoser(tip, S, tx(i), ev.clientY - r.top);
   };
-  cv.onmousemove = survol; cv.onmouseleave = quitter; cv.onpointerdown = survol;
+  brancher(cv, survol, quitter);
 }
 
 // ---------------------------------------------------------------------------
@@ -1177,16 +1353,26 @@ function drawHalteres(cv, tip, L, survolee) {
         valeur: pts(Math.abs(ecart)) }]);
     tipPoser(tip, S, ev.clientX - r.left, py);
   };
-  cv.onmousemove = survol; cv.onmouseleave = quitter; cv.onpointerdown = survol;
+  brancher(cv, survol, quitter);
 }
 
 // ---------------------------------------------------------------------------
 // Gain latent par ligne : barres divergentes autour de zero
 // ---------------------------------------------------------------------------
 function drawLatent(cv, tip, L, dev, survolee) {
-  const H = 21, padT = 4, padB = 6, padL = 62, padR = 136;
+  const H = 21, padT = 4, padB = 6, padL = 62;
   const S = surface(cv, padT + L.length * H + padB), ctx = S.ctx;
   if (!L.length) return;
+  const texteLatent = function (r) {
+    const cout = r.valeur - r.latent;
+    return argent(r.latent, dev) + (cout > 0 ? "  " + fmtSigned(r.latent / cout, 1) : "");
+  };
+  let padR = 136;
+  if (etroit(S)) {
+    let lmax = 0;
+    for (const r of L) lmax = Math.max(lmax, ctx.measureText(texteLatent(r)).width);
+    padR = Math.min(136, Math.ceil(lmax) + 16);
+  }
   const x0 = padL, x1 = S.w - padR;
   let lo = 0, hi = 0;
   for (const r of L) { lo = Math.min(lo, r.latent); hi = Math.max(hi, r.latent); }
@@ -1201,9 +1387,7 @@ function drawLatent(cv, tip, L, dev, survolee) {
     ctx.fillStyle = r.latent >= 0 ? cP : cN;
     barreH(ctx, y - 6, 12, tx(0), tx(r.latent));
     ctx.fillStyle = cssVar("--ink-2"); ctx.textAlign = "right";
-    const coutL = r.valeur - r.latent;
-    ctx.fillText(argent(r.latent, dev) + (coutL > 0 ? "  " + fmtSigned(r.latent / coutL, 1) : ""),
-                 S.w - 6, y);
+    ctx.fillText(texteLatent(r), S.w - 6, y);
   }
   const z = Math.round(tx(0)) + 0.5;
   ctx.strokeStyle = cssVar("--axis"); ctx.lineWidth = 1;
@@ -1221,7 +1405,7 @@ function drawLatent(cv, tip, L, dev, survolee) {
       { nom: "valeur de la ligne", valeur: montant(x.valeur, dev) }]);
     tipPoser(tip, S, ev.clientX - r.left, py);
   };
-  cv.onmousemove = survol; cv.onmouseleave = quitter; cv.onpointerdown = survol;
+  brancher(cv, survol, quitter);
 }
 
 // ---------------------------------------------------------------------------
@@ -1336,14 +1520,14 @@ function drawCarte(cv, tip, G, survolee) {
     tipRemplir(tip, MOIS_LONGS[m] + " " + an, L);
     tipPoser(tip, S, x0 + (m + 0.5) * cw, py);
   };
-  cv.onmousemove = survol; cv.onmouseleave = quitter; cv.onpointerdown = survol;
+  brancher(cv, survol, quitter);
 }
 
 // ---------------------------------------------------------------------------
 // Vue tableau : chaque graphique a son equivalent lisible
 // ---------------------------------------------------------------------------
 function buildTable(host, headers, rows, classer) {
-  let h = "<table><thead><tr>";
+  let h = '<div class="defile"><table><thead><tr>';
   for (const c of headers) h += "<th>" + c + "</th>";
   h += "</tr></thead><tbody>";
   for (const r of rows) {
@@ -1354,7 +1538,7 @@ function buildTable(host, headers, rows, classer) {
     });
     h += "</tr>";
   }
-  h += "</tbody></table>";
+  h += "</tbody></table></div>";
   // Idempotent : une table reconstruite a l'identique perdrait sa position de
   // defilement et la selection de l'utilisateur a chaque rafraichissement.
   if (host.innerHTML !== h) host.innerHTML = h;
@@ -2124,7 +2308,7 @@ function drawRepartition(cv, tip, R, survole) {
     tipRemplir(tip, s.caisse ? "liquidites" : s.nom + (s.domaine ? " · " + s.domaine : ""), L);
     tipPoser(tip, S, px, ev.clientY - r.top);
   };
-  cv.onmousemove = survol; cv.onmouseleave = quitter; cv.onpointerdown = survol;
+  brancher(cv, survol, quitter);
 }
 function deriverExpo(h) {
   if (!h || !h.ok || !h.dates || !h.dates.length || !h.liquidites) return null;
@@ -2199,7 +2383,7 @@ function drawExpo(cv, tip, E, croix) {
     tipRemplir(tip, jourLong(E.dates[k]), L);
     tipPoser(tip, S, tx(k), ev.clientY - r.top);
   };
-  cv.onmousemove = survol; cv.onmouseleave = quitter; cv.onpointerdown = survol;
+  brancher(cv, survol, quitter);
 }
 function renderArgent() {
   const d = opsEtatCourant, bloc = el("ops-argent");
@@ -2430,7 +2614,7 @@ function drawDomaines(cv, tip, Dm, survole) {
     tipRemplir(tip, g.nom, L);
     tipPoser(tip, S, px, py);
   };
-  cv.onmousemove = survol; cv.onmouseleave = quitter; cv.onpointerdown = survol;
+  brancher(cv, survol, quitter);
 }
 
 // Legende en DOM, noeud par noeud : tickers et libelles GICS viennent de
@@ -2654,12 +2838,14 @@ function drawCapital(cv, tip, C, croix) {
     ctx.beginPath(); ctx.arc(XL, YL, 4.5, 0, 6.2832); ctx.fillStyle = cssVar("--surface"); ctx.fill();
     ctx.lineWidth = 2; ctx.strokeStyle = cC; ctx.stroke();
     ctx.font = POLICE; ctx.fillStyle = cssVar("--ink-2"); ctx.textAlign = "right"; ctx.textBaseline = "bottom";
-    ctx.fillText("maintenant", XL - 8, YL - 6);
+    // Trop serre sur un telephone, ou il mordait sur la courbe : la phrase
+    // "A regarder" de la carte dit deja ce qu'est l'anneau.
+    if (!etroit(S)) ctx.fillText("maintenant", XL - 8, YL - 6);
   } else point(ctx, XL, YL, cC);
   etiquettesDroite(ctx, [
     { y: zl, texte: "depart " + kDollars(C.depart, 1000), couleur: cssVar("--axis") },
     { y: YL, texte: montant(C.equity[n - 1], C.devise) + " · " + fmtSigned(C.depuis[n - 1], 2),
-      couleur: cC, fort: true }], x1, y0, y1);
+      court: fmtSigned(C.depuis[n - 1], 2), couleur: cC, fort: true }], x1, y0, y1);
   if (croix !== undefined && croix >= 0) {
     const X = Math.round(tx(croix)) + 0.5;
     ctx.strokeStyle = cssVar("--axis"); ctx.lineWidth = 1;
@@ -2683,7 +2869,7 @@ function drawCapital(cv, tip, C, croix) {
     tipRemplir(tip, jourLong(C.dates[i]) + (vivant ? " · maintenant" : ""), L);
     tipPoser(tip, S, tx(i), ev.clientY - rc.top);
   };
-  cv.onmousemove = survol; cv.onmouseleave = quitter; cv.onpointerdown = survol;
+  brancher(cv, survol, quitter);
 }
 
 // Les variations, alignees sur les seances de la courbe du dessus : une barre
@@ -2717,6 +2903,12 @@ function drawVariations(cv, tip, C, mode, survolee) {
     }
   }
   const cP = cssVar("--pos"), cN = cssVar("--neg");
+  const poses = [];                   // les valeurs deja ecrites, en rectangles
+  let kHaut = -1, kBas = -1;
+  for (let k = 0; k < P.length; k++) {
+    if (P[k].r > 0 && (kHaut < 0 || P[k].r > P[kHaut].r)) kHaut = k;
+    if (P[k].r < 0 && (kBas < 0 || P[k].r < P[kBas].r)) kBas = k;
+  }
   for (let k = 0; k < P.length; k++) {
     const p = P[k], X = (tx(p.i0) + tx(p.i1)) / 2;
     const w = Math.max(3, Math.min(24, (p.i1 - p.i0 + 1) * G.pas * 0.62));
@@ -2728,7 +2920,13 @@ function drawVariations(cv, tip, C, mode, survolee) {
     if (groupe) {
       ctx.font = POLICE_FORTE; ctx.fillStyle = cssVar("--ink-2"); ctx.textAlign = "center";
       ctx.textBaseline = p.r >= 0 ? "bottom" : "top";
-      ctx.fillText(fmtSigned(p.r, 1), X, p.r >= 0 ? ty(p.r) - 4 : ty(p.r) + 4);
+      const tv = fmtSigned(p.r, 1), lv = ctx.measureText(tv).width;
+      const yv = p.r >= 0 ? ty(p.r) - 4 : ty(p.r) + 4, haut = p.r >= 0 ? yv - 13 : yv;
+      const rect = [X - lv / 2 - 2, X + lv / 2 + 2, haut, haut + 13];
+      const tient = lv <= (p.i1 - p.i0 + 1) * G.pas + 6;
+      const libre = poses.every(function (q) {
+        return rect[1] < q[0] || rect[0] > q[1] || rect[3] < q[2] || rect[2] > q[3]; });
+      if ((tient || k === kHaut || k === kBas) && libre) { ctx.fillText(tv, X, yv); poses.push(rect); }
       ctx.font = POLICE;
     }
   }
@@ -2751,7 +2949,7 @@ function drawVariations(cv, tip, C, mode, survolee) {
     tipRemplir(tip, p.titre, L);
     tipPoser(tip, S, (tx(p.i0) + tx(p.i1)) / 2, ev.clientY - rc.top);
   };
-  cv.onmousemove = survol; cv.onmouseleave = quitter; cv.onpointerdown = survol;
+  brancher(cv, survol, quitter);
 }
 
 function renderCapital() {
@@ -2853,9 +3051,9 @@ function renderGlissant(d) {
   const g = glissant12(m);
   drawLines(cv, el("tip-glissant"), {
     dates: g.dates, height: 220, fillZero: true,
-    // Nom COURT : l'etiquette de bout de trace dispose de 104 px, et une
-    // etiquette qui ne tient pas est rognee par le bord du canvas. Le titre
-    // du graphique porte deja "douze mois".
+    // Nom COURT : l'etiquette de bout de trace dispose de 104 px (92 sur un
+    // telephone) ; au-dela, elle serait raccourcie. Le titre du graphique
+    // porte deja "douze mois".
     series: [{ name: "avance", color: cssVar("--series-1"),
                values: g.ecart.map(function (v) { return propre(v) ? 100 * v : null; }) }],
     yFmt: function (v) { return (v > 0 ? "+" : "") + fmtNum(v, 0) + NB + "pts"; },
@@ -3205,6 +3403,13 @@ el("null-btn").onclick = function () {
   const n = parseInt(el("null-draws").value, 10) || 150;
   onDemand("null", "/api/null", function () { return { values: state, n_draws: n }; }, renderNull,
            n + " backtests sur scores aleatoires, patiente..."); };
+// Sous 900 px, les reglages sont replies derriere ce bouton (voir le CSS) :
+// sur un telephone, ils occupaient l'ecran avant le moindre resultat.
+el("reglages-bascule").onclick = function () {
+  const a = el("reglages"), ouvert = !a.classList.contains("ouvert");
+  a.classList.toggle("ouvert", ouvert);
+  this.setAttribute("aria-expanded", String(ouvert));
+};
 el("theme").onclick = function () {
   const now = document.documentElement.getAttribute("data-theme");
   const dark = now ? now === "dark" : window.matchMedia("(prefers-color-scheme: dark)").matches;
@@ -3240,13 +3445,17 @@ PAGE = """<!doctype html>
     <button id="niv-complet" aria-pressed="false">Complet</button>
   </span>
   <span class="badge avance">__MODEBADGE__</span>
-  <span class="badge">__PERIODE__</span>
+  <span class="badge periode">__PERIODE__</span>
   <span class="badge version" id="version" hidden></span>
   <button id="theme" title="Basculer clair / sombre">Theme</button>
 </header>
 
 <div class="layout">
-  <aside>__CONTROLS__</aside>
+  <aside id="reglages">
+    <button type="button" class="reglages-bascule" id="reglages-bascule" aria-expanded="false"
+            aria-controls="reglages-corps">Reglages de la strategie</button>
+    <div class="reglages-corps" id="reglages-corps">__CONTROLS__</div>
+  </aside>
 
   <main id="panels">
     <div id="error" class="msg"></div>
@@ -3578,7 +3787,7 @@ PAGE = """<!doctype html>
         aujourd'hui. Attention aux valorisations : le courtier marque au marche, le plan
         au dernier cours en cache. Un ecart de plus de 2 % entre les deux fait echouer le
         controle "Valorisation coherente" - c'est le signe d'un cache perime.</p>
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:22px;margin-bottom:18px">
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(320px,100%),1fr));gap:22px;margin-bottom:18px">
         <div id="ops-halteres-bloc" hidden>
           <h4 style="margin-top:8px">Detenu contre vise</h4>
           <div class="legend"><span><i class="point"></i>vise par la strategie</span>
@@ -3591,7 +3800,7 @@ PAGE = """<!doctype html>
           <div class="plot"><canvas id="cv-latent"></canvas><div class="tip" id="tip-latent"></div></div>
         </div>
       </div>
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:22px">
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(320px,100%),1fr));gap:22px">
         <div><h3 style="font-size:13px;margin:0 0 8px">Detenu</h3><div id="ops-positions"></div></div>
         <div><h3 style="font-size:13px;margin:0 0 8px">Vise</h3><div id="ops-cible"></div></div>
       </div>

@@ -30,3 +30,19 @@ def test_un_identifiant_n_apparait_qu_une_fois():
     ids = re.findall(r'\bid="([^"]+)"', _page())
     doublons = sorted({i for i in ids if ids.count(i) > 1})
     assert not doublons, doublons
+
+
+def test_la_page_tient_sur_un_telephone():
+    """Ce qui empeche la page de deborder d'un ecran de 360 px de large."""
+    page = _page()
+    assert '<meta name="viewport" content="width=device-width' in page
+    # Une piste de grille de largeur minimale fixe deborde d'un ecran plus
+    # etroit qu'elle : toujours min(<largeur>, 100%).
+    assert not re.findall(r"minmax\(\s*\d+px", page)
+    # Les tableaux defilent dans leur carte au lieu d'elargir la page.
+    assert '<div class="defile"><table>' in page
+    # Sous 900 px, les reglages ne collent plus en haut de l'ecran : ils se
+    # replient derriere un bouton.
+    assert "aside { position: static" in page
+    assert 'id="reglages-bascule"' in page and 'aria-expanded="false"' in page
+    assert 'id="reglages-corps"' in page
