@@ -22,8 +22,13 @@ sur SA machine. Trois fichiers gardent une memoire du compte precedent :
 
 Ce script ne touche JAMAIS au courtier. Creer ou supprimer un compte se fait
 sur le tableau de bord d'Alpaca, avec des identifiants ; un script n'a rien a
-y faire. Ici on ne fait que du menage local, et rien n'est supprime : tout est
-deplace dans data/archives/.
+y faire. Ici on ne fait que du menage local, et rien ne se perd : tout est
+d'abord copie dans data/archives/.
+
+Les deux etats JSON sont ensuite SUPPRIMES, pas vides. Depuis le 30/10/2026,
+le defi traite un etat illisible - un fichier vide l'est - comme un VERROU
+(voir `defi.lire_etat`) : le robot n'acheterait rien sur le compte neuf.
+Absent, l'etat du defi s'ouvre a la valeur du compte : c'est le chemin prevu.
 """
 from __future__ import annotations
 
@@ -49,6 +54,30 @@ FICHIERS = [
 ]
 
 
+def vider(chemin: Path) -> str:
+    """Remet un fichier a zero, APRES son archivage. Rend ce qui a ete fait.
+
+    Etat JSON : supprime. Si un montage refuse la suppression, on ecrit un
+    objet vide, que le robot et le defi lisent comme un etat neuf - jamais un
+    fichier vide, que le defi lit comme un verrou. Journal CSV : on garde
+    l'entete. Texte : vide.
+    """
+    if chemin.suffix == ".json":
+        try:
+            chemin.unlink()
+            return "supprime"
+        except OSError:
+            chemin.write_text("{}", encoding="utf-8")
+            return "remis a {}"
+    if chemin.suffix == ".csv":
+        with chemin.open("r", newline="", encoding="utf-8") as fh:
+            entete = fh.readline()
+        chemin.write_text(entete, encoding="utf-8")
+        return "vide, entete gardee"
+    chemin.write_text("", encoding="utf-8")
+    return "vide"
+
+
 def comptes_du_journal(chemin: Path) -> set:
     if not chemin.exists():
         return set()
@@ -59,14 +88,14 @@ def comptes_du_journal(chemin: Path) -> set:
         return set()
 
 
-def main() -> int:
+def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--config", default=str(RACINE / "config" / "us.yaml"))
     ap.add_argument("--appliquer", action="store_true",
                     help="archive reellement (sans ce drapeau, on ne fait que montrer)")
     ap.add_argument("--sans-courtier", action="store_true")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
     cfg = Config.load(args.config)
     print("=" * 68)
@@ -120,16 +149,10 @@ def main() -> int:
                                    Path(relatif).name, quoi))
         if args.appliquer:
             archives.mkdir(parents=True, exist_ok=True)
-            # On COPIE puis on vide, plutot que de deplacer : certains montages
-            # refusent la suppression, et un echec a mi-chemin laisserait le
-            # projet sans son journal.
+            # On COPIE d'abord : un echec a mi-chemin ne doit laisser le
+            # projet ni sans son journal, ni sans trace de l'ancien defi.
             shutil.copy2(str(chemin), str(archives / chemin.name))
-            if chemin.suffix == ".csv":
-                with chemin.open("r", newline="", encoding="utf-8") as fh:
-                    entete = fh.readline()
-                chemin.write_text(entete, encoding="utf-8")   # on garde l'entete
-            else:
-                chemin.write_text("", encoding="utf-8")
+            print("       %s" % vider(chemin))
             deplaces += 1
 
     if args.appliquer:
@@ -144,13 +167,14 @@ def main() -> int:
     print("  2. genere de NOUVELLES cles API pour ce compte")
     print("  3. remplace-les dans secrets/alpaca.json")
     print("  4. lance ce script avec --appliquer")
-    print("  5. verifie :  python scripts/verifier_sante.py")
+    print("  5. redemarre le tableau de bord : il garde l'ancienne connexion")
+    print("       sudo systemctl restart quant-dashboard.service")
+    print("  6. verifie :  python scripts/verifier_sante.py")
     print()
-    print("  Et regle la strategie AVANT de demarrer, sinon les premieres")
-    print("  seances ne mesureront pas ce que tu crois mesurer :")
-    print("    portfolio.volatilite.active : true")
-    print("    defi.active                 : true")
-    print("    execution.rebalance         : weekly  (pour les 5 jours minimum)")
+    print("  La configuration (config/us.yaml) est celle que le compte neuf")
+    print("  mesurera : si tu veux en changer, c'est AVANT le premier passage")
+    print("  du robot, sinon les premieres seances ne mesureront pas ce que")
+    print("  tu crois mesurer.")
     return 0
 
 
