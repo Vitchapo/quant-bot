@@ -50,6 +50,10 @@ from quantbot.config import Config
 
 RACINE = Path(__file__).resolve().parent.parent
 JOURNAL = RACINE / "data" / "tendance" / "releves_ftmo.csv"
+#: Une ligne par passage, reussi ou non. Une tache planifiee n'a pas d'ecran :
+#: sans ce fichier, un releve qui echoue echoue en silence. Du 31/10 au soir
+#: au 02/11, aucun releve n'a ete ecrit, et rien ne disait pourquoi.
+JOURNAL_TACHE = RACINE / "data" / "tendance" / "releve_ftmo.log"
 NOM_TACHE = "quantbot-releve-ftmo"
 #: Les 15 instruments du protocole, sous leur nom FTMO sans suffixe.
 INSTRUMENTS = ["US500", "GER40", "UK100", "JP225", "AUS200", "HK50",
@@ -95,6 +99,16 @@ def attendre_cotations(mt5, symboles: list, attendre=time.sleep) -> bool:
             return True
         attendre(PAS_S)
     return False
+
+
+def noter(texte: str) -> None:
+    """Ajoute une ligne horodatee (UTC) au journal de la tache. Ne leve jamais."""
+    try:
+        JOURNAL_TACHE.parent.mkdir(parents=True, exist_ok=True)
+        with JOURNAL_TACHE.open("a", encoding="utf-8") as fh:
+            fh.write("%s  %s\n" % (datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), texte))
+    except OSError:
+        pass
 
 
 def releve(mt5, carte: dict, maintenant: datetime = None, attendre=time.sleep) -> list:
@@ -290,17 +304,25 @@ def main() -> int:
 
     cfg = Config.load(args.config)
     try:
-        api = mt5broker.connecter(cfg)
+        # Lecture seule : aucun ordre ne part d'ici. La case "Algo Trading"
+        # du terminal ne regarde que le robot, pas ce releve.
+        api = mt5broker.connecter(cfg, exiger_trading=False)
     except mt5broker.MT5Indisponible as exc:
+        noter("ECHEC : MT5 injoignable : %s" % " ".join(str(exc).split())[:300])
         print("-" * 72); print(exc); print("-" * 72)
         return 2
     try:
-        carte = api.construire_carte(INSTRUMENTS)
-        lignes = releve(api._mt5, carte)
-    finally:
-        api.fermer()
-    ecrire(lignes)
+        try:
+            carte = api.construire_carte(INSTRUMENTS)
+            lignes = releve(api._mt5, carte)
+        finally:
+            api.fermer()
+        ecrire(lignes, JOURNAL)
+    except Exception as exc:
+        noter("ECHEC : %s : %s" % (type(exc).__name__, " ".join(str(exc).split())[:300]))
+        raise
     ouverts = [l["instrument"] for l in lignes if l["ouvert"]]
+    noter("ok : %d instrument(s) releve(s), %d ouvert(s)" % (len(lignes), len(ouverts)))
     absents = [n for n in INSTRUMENTS if n not in carte]
     print("%s : %d instrument(s) releve(s), %d marche(s) ouvert(s) : %s"
           % (datetime.now().strftime("%Y-%m-%d %H:%M"), len(lignes), len(ouverts), " ".join(ouverts)))

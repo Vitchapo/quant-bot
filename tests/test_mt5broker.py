@@ -53,6 +53,17 @@ class TestConnexion:
         with pytest.raises(mt5broker.MT5Indisponible, match="trading automatique"):
             a.initialiser()
 
+    def test_une_lecture_seule_n_exige_pas_le_trading_automatique(self):
+        """Le releve des couts FTMO ne passe aucun ordre : la case "Algo
+        Trading" decochee l'a pourtant arrete du 31/10 au 02/11."""
+        a = mt5broker.MT5(mt5=FauxMT5(trade_allowed=False))
+        assert a.initialiser(exiger_trading=False)["simulation"] is True
+
+    def test_meme_en_lecture_seule_un_compte_reel_est_refuse(self, base_config):
+        faux = FauxMT5(trade_mode=ACCOUNT_TRADE_MODE_REAL, trade_allowed=False)
+        with pytest.raises(LiveRefuse, match="REEL"):
+            mt5broker.connecter(base_config.copy(), mt5=faux, exiger_trading=False)
+
     def test_un_compte_reel_est_refuse_sans_les_verrous(self, base_config):
         faux = FauxMT5(trade_mode=ACCOUNT_TRADE_MODE_REAL)
         cfg = base_config.copy()

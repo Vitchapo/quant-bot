@@ -122,7 +122,7 @@ class MT5:
     # -- connexion ---------------------------------------------------------
     def initialiser(self, chemin_terminal: str = None, login: int = None,
                     mot_de_passe: str = None, serveur: str = None,
-                    timeout_ms: int = 30_000) -> dict:
+                    timeout_ms: int = 30_000, exiger_trading: bool = True) -> dict:
         """Ouvre la connexion et VERIFIE qu'elle est utilisable.
 
         Trois verifications distinctes, parce qu'elles echouent pour trois
@@ -134,6 +134,11 @@ class MT5:
         La troisieme est celle qu'on oublie : `initialize()` reussit, le compte
         s'affiche, tout semble en place, et chaque ordre revient en 10027
         parce qu'une case n'est pas cochee dans les options du terminal.
+
+        `exiger_trading=False` la saute, et seulement elle : pour un script qui
+        ne fait que LIRE (le releve des couts FTMO). Exiger une permission
+        d'envoyer des ordres pour lire des cotations l'a arrete du 31/10 au
+        02/11, le jour ou la case "Algo Trading" s'est retrouvee decochee.
         """
         mt5 = self._mt5
         kwargs = {"timeout": int(timeout_ms)}
@@ -181,7 +186,7 @@ class MT5:
         info = mt5.terminal_info()
         if info is None:
             raise MT5Indisponible("terminal_info() ne renvoie rien : terminal ferme ?")
-        if not getattr(info, "trade_allowed", False):
+        if exiger_trading and not getattr(info, "trade_allowed", False):
             raise MT5Indisponible(
                 "Le terminal refuse le trading automatique.\n"
                 "Dans MT5 : Outils > Options > Expert Advisors >\n"
@@ -655,6 +660,7 @@ def connecter(cfg, reel: bool = False, mt5=None, **kw) -> MT5:
         login=kw.pop("login", None) or cfg.get("broker.login"),
         mot_de_passe=kw.pop("mot_de_passe", None) or os.environ.get("MT5_PASSWORD"),
         serveur=kw.pop("serveur", None) or cfg.get("broker.serveur"),
+        exiger_trading=bool(kw.pop("exiger_trading", True)),
     )
     if not api.simulation:
         if not reel:

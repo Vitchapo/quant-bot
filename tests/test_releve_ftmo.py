@@ -157,6 +157,42 @@ def test_spread_retenu_le_plus_eleve_de_trois_jours(tmp_path):
     assert all(v["complet"] for v in s.values())
 
 
+def test_un_releve_qui_echoue_laisse_une_trace(tmp_path, monkeypatch):
+    """Une tache planifiee n'a pas d'ecran : du 31/10 au soir au 02/11, aucun
+    releve n'a ete ecrit, et rien ne disait pourquoi."""
+    def injoignable(cfg, **kw):
+        raise mt5broker.MT5Indisponible("terminal MT5 ferme")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(R.mt5broker, "connecter", injoignable)
+    monkeypatch.setattr(R, "JOURNAL", tmp_path / "releves.csv")
+    monkeypatch.setattr(R, "JOURNAL_TACHE", tmp_path / "releve_ftmo.log")
+    monkeypatch.setattr(sys, "argv", ["releve_ftmo.py"])
+    assert R.main() == 2
+    assert "ECHEC : MT5 injoignable : terminal MT5 ferme" in (tmp_path / "releve_ftmo.log").read_text(encoding="utf-8")
+    assert not (tmp_path / "releves.csv").exists()
+
+
+def test_un_releve_reussi_le_note_aussi(tmp_path, monkeypatch):
+    faux = FauxTerminal(datetime.now(timezone.utc))
+    api = mt5broker.MT5(mt5=faux)
+    api.initialiser()
+    appels = []
+
+    def connecter(cfg, **kw):
+        appels.append(kw)
+        return api
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(R.mt5broker, "connecter", connecter)
+    monkeypatch.setattr(R, "JOURNAL", tmp_path / "releves.csv")
+    monkeypatch.setattr(R, "JOURNAL_TACHE", tmp_path / "releve_ftmo.log")
+    monkeypatch.setattr(sys, "argv", ["releve_ftmo.py"])
+    assert R.main() == 0
+    assert "ok : 15 instrument(s) releve(s), 15 ouvert(s)" in (tmp_path / "releve_ftmo.log").read_text(encoding="utf-8")
+    assert len((tmp_path / "releves.csv").read_text(encoding="utf-8").splitlines()) == 16
+    assert appels == [{"exiger_trading": False}]       # lecture seule : la case Algo Trading n'y fait rien
+
+
 def test_la_tache_lance_ce_script_toutes_les_heures():
     cmd = R.commande_tache(python="C:/Python310/python.exe")
     assert cmd[:2] == ["schtasks", "/Create"] and "HOURLY" in cmd and R.NOM_TACHE in cmd
