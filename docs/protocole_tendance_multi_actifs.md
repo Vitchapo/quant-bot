@@ -155,7 +155,59 @@ Dans le test :
 
 | instrument | nom MT5 | contrat | spread | commission | swap achat | swap vente | levier | dividendes |
 |---|---|---|---|---|---|---|---|---|
-| *(étape 1)* | | | | | | | | |
+| US500 | US500.cash | 1 × indice (USD) | 0,0081 % du cours | aucune | −185,14 pts/nuit = −8,90 %/an ; marge 5,03 % | 4,06 pts/nuit = 0,20 %/an ; marge 3,68 % | 1:15 | versés aux acheteurs, prélevés aux vendeurs, par le swap (vu le 30/10, 05/11, 06/11) |
+| GER40 | GER40.cash | 1 × indice (EUR) | 0,0048 % du cours | aucune | −509,88 pts/nuit = −7,24 %/an ; marge 4,74 % | −51,46 pts/nuit = −0,73 %/an ; marge 3,23 % | 1:15 | aucun ajustement vu (le DAX réinvestit ses dividendes) |
+| UK100 | UK100.cash | 1 × indice (GBP) | 0,0070 % du cours | aucune | −262,58 pts/nuit = −9,01 %/an ; marge 5,14 % | 6,73 pts/nuit = 0,23 %/an ; marge 3,52 % | 1:15 | versés aux acheteurs, prélevés aux vendeurs, par le swap (vu le 04/11, 05/11) |
+| JP225 | JP225.cash | 10 × indice (JPY) | 0,0187 % du cours | aucune | −967,09 pts/nuit = −5,75 %/an ; marge 4,50 % | −398,21 pts/nuit = −2,37 %/an ; marge 3,62 % | 1:15 | aucun ajustement pendant les relevés |
+| AUS200 | AUS200.cash | 1 × indice (AUD) | 0,0113 % du cours | aucune | −251,50 pts/nuit = −10,29 %/an ; marge 5,48 % | 13,39 pts/nuit = 0,55 %/an ; marge 4,30 % | 1:15 | versés aux acheteurs, prélevés aux vendeurs, par le swap (vu le 04/11, 05/11) |
+| HK50 | HK50.cash | 1 × indice (HKD) | 0,0273 % du cours | aucune | −477,93 pts/nuit = −7,34 %/an ; marge 3,46 % | −25,15 pts/nuit = −0,39 %/an ; marge 4,27 % | 1:9 | versés aux acheteurs, prélevés aux vendeurs, par le swap (vu le 04/11, 05/11) |
+| EURUSD | EURUSD | 100 000 EUR | 0,0018 % du cours | 3 $ par lot (0,0027 %) | −10,02 pts/nuit = −3,25 %/an ; marge 1,88 % | 0,39 pts/nuit = 0,13 %/an ; marge 1,25 % | 1:30 | — |
+| GBPUSD | GBPUSD | 100 000 GBP | 0,0060 % du cours | 3 $ par lot (0,0022 %) | −5,28 pts/nuit = −1,43 %/an ; marge 1,48 % | −5,04 pts/nuit = −1,37 %/an ; marge 1,24 % | 1:30 | — |
+| USDJPY | USDJPY | 100 000 USD | 0,0051 % du cours | 3 $ par lot (0,0030 %) | 3,41 pts/nuit = 0,79 %/an ; marge 1,84 % | −17,43 pts/nuit = −4,02 %/an ; marge 1,40 % | 1:30 | — |
+| USDCHF | USDCHF | 100 000 USD | 0,0074 % du cours | 3 $ par lot (0,0030 %) | 1,96 pts/nuit = 0,88 %/an ; marge 3,00 % | −13,46 pts/nuit = −6,02 %/an ; marge 2,14 % | 1:30 | — |
+| USDCAD | USDCAD | 100 000 USD | 0,0043 % du cours | 3 $ par lot (0,0030 %) | 0,64 pts/nuit = 0,17 %/an ; marge 1,21 % | −10,48 pts/nuit = −2,74 %/an ; marge 1,37 % | 1:30 | — |
+| AUDUSD | AUDUSD | 100 000 AUD | 0,0071 % du cours | 3 $ par lot (0,0043 %) | −2,57 pts/nuit = −1,35 %/an ; marge 2,32 % | −6,37 pts/nuit = −3,36 %/an ; marge 2,39 % | 1:30 | — |
+| NZDUSD | NZDUSD | 100 000 NZD | 0,0107 % du cours | 3 $ par lot (0,0053 %) | −4,69 pts/nuit = −3,05 %/an ; marge 1,92 % | 0,08 pts/nuit = 0,05 %/an ; marge 1,07 % | 1:30 | — |
+| XAUUSD | XAUUSD | 100 oz | 0,0119 % du cours | aucune | −59,96 pts/nuit = −5,36 %/an ; marge 1,48 % | −4,20 pts/nuit = −0,38 %/an ; marge 4,25 % | 1:15 | — |
+| XAGUSD | XAGUSD | 5 000 oz | 0,0958 % du cours | aucune | −13,15 pts/nuit = −9,27 %/an ; marge 5,39 % | −0,37 pts/nuit = −0,25 %/an ; marge 4,13 % | 1:15 | — |
+
+Relevés du 30 octobre au 6 novembre 2026 dans MetaTrader 5 (essai gratuit FTMO,
+compte « $100k Swing 2-Step »), un par heure. Calculs par
+`scripts/couts_tendance.py` ; les fractions que lit le test sont dans
+`docs/tendance_couts.csv`. Les relevés perdus (case « Algo Trading » décochée
+du 31/10 au soir au 2/11, puis coupures de courant) n'ont fait que retarder la
+fin des relevés.
+
+- **Spread.** Ne comptent que les relevés pris pendant la séance de la bourse
+  sous-jacente, à son heure locale et hors jours fériés. Le 3 novembre, Tokyo
+  était fermé (fête de la culture). Devises et métaux : tout relevé d'un jour
+  de semaine. Le relevé d'un jour est la médiane de ses relevés ; le spread
+  retenu est le plus élevé des trois premiers jours couverts. Avec la
+  commission, c'est le coût de chaque transaction.
+- **Commission.** Le terminal ne l'affiche pas. Devises : 3 $ par lot et par
+  transaction, lecture prudente de deux sources (Propvator, « FTMO trading
+  conditions », 24/08/2026 ; forum BabyPips, « FTMO overall costs »). Indices
+  et métaux : aucune, selon les mêmes sources. Son poids reste minime : 0,002 à
+  0,005 % par transaction.
+- **Swaps.** FTMO les exprime en points par lot et par nuit, et les change
+  chaque jour. Ils sont annualisés sur 365 nuits, puisque le swap triple couvre
+  le week-end, et rapportés au cours du même relevé. La marge est la médiane,
+  sur les relevés des jours de semaine, de « portage du modèle ce jour-là −
+  swap annualisé », jamais négative.
+- **Taux du modèle.** Ceux de la BRI au jour du relevé (mise à jour du
+  6 novembre, dans `data/tendance/couts/`), plus deux décisions annoncées après
+  la dernière date publiée par la BRI : la Banque de réserve d'Australie, à
+  4,85 % le 3 novembre, et la Banque d'Angleterre, à 4,00 % le 5 novembre.
+- **Dividendes.** FTMO les verse aux acheteurs et les prélève aux vendeurs, par
+  le swap de la nuit ex-dividende : vu sur US500, UK100, AUS200 et HK50. Ces
+  relevés sont écartés du calcul des marges, car ce n'est pas un coût de
+  financement : le swap achat monte et le swap vente baisse d'autant, et leur
+  somme ne bouge pas. Pour le test, qui prend les indices tels que publiés,
+  cela veut dire deux choses. Il est prudent pour les positions acheteuses, qui
+  ne touchent pas ces dividendes, mais optimiste pour les vendeuses, qui ne les
+  paient pas. Au total, il reste prudent tant que le portefeuille est plus
+  souvent acheteur que vendeur sur les indices. Le protocole ne parlait que des
+  positions acheteuses : la nuance est consignée ici, avant le test.
 
 ### La période et les données
 
@@ -349,7 +401,7 @@ réussit à peu près une fois sur deux.
 | # | étape | fait le |
 |---|---|---|
 | 0 | relire, valider, committer et pousser ce protocole | 27 octobre 2026 (`f0afabb`) |
-| 1 | relever les conditions FTMO dans MT5, remplir le tableau des coûts, committer | |
+| 1 | relever les conditions FTMO dans MT5, remplir le tableau des coûts, committer | 6 novembre 2026 |
 | 2 | télécharger et contrôler les données, consigner empreintes et exclusions, committer | 30 octobre 2026 |
 | 3 | écrire le code et ses tests sur données synthétiques : sans signal, aucun avantage ; avec une tendance implantée, les critères la détectent ; modifier les cours futurs ne change aucune position passée | 30 octobre 2026 (`5b0b596`) |
 | 4 | lancer le test **une seule fois**, remplir la colonne « résultat », committer la sortie brute | |
