@@ -121,6 +121,25 @@ def test_sans_cotation_le_releve_finit_par_renoncer():
     assert fermes == {"US500", "GER40", "UK100", "JP225", "AUS200", "HK50", "XAUUSD", "XAGUSD"}
 
 
+def test_un_spread_nul_est_un_vrai_cours():
+    """EURUSD, le 03/11 a 03:42 UTC : bid = ask. Ce n'est pas un marche ferme."""
+    t = datetime(2026, 11, 3, 3, 42, tzinfo=timezone.utc)
+
+    class SpreadNul(FauxTerminal):
+        def symbol_info_tick(self, nom):
+            tick = super().symbol_info_tick(nom)
+            if nom == "EURUSD" and tick is not None:
+                tick.ask = tick.bid
+            return tick
+
+    faux = SpreadNul(t)
+    api = mt5broker.MT5(mt5=faux)
+    api.initialiser()
+    lignes = R.releve(faux, api.construire_carte(R.INSTRUMENTS), t)
+    eur = next(l for l in lignes if l["instrument"] == "EURUSD")
+    assert eur["ouvert"] and eur["spread_prix"] == 0.0
+
+
 def test_le_week_end_tout_est_ferme():
     """Aucune cotation fraiche, pas meme le change : rien n'est ouvert."""
     tous_vieux = {s: 40 * 3600 + 1234 for s in PRIX}

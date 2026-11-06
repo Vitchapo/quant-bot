@@ -178,7 +178,10 @@ def marquer_ouverts(lignes: list, maintenant: datetime) -> list:
         age = (local + 3600.0 * decalage) - l["heure_tick_serveur"]
         l["age_s"] = round(age, 1)
         l["decalage_serveur_h"] = decalage
-        l["ouvert"] = bool(reference_fraiche and age <= FRAICHEUR_S and l["spread_prix"])
+        # Un spread NUL est un vrai cours (EURUSD le 03/11 a 03:42 UTC : bid =
+        # ask). Seul un cours absent (spread None) dit que rien n'est cote.
+        s = l["spread_prix"]
+        l["ouvert"] = bool(reference_fraiche and age <= FRAICHEUR_S and s is not None and s >= 0)
     return lignes
 
 
