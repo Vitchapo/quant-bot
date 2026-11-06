@@ -1561,7 +1561,12 @@ function post(path, body) {
   return fetch(path, { method: "POST", headers: { "Content-Type": "application/json" },
                        body: JSON.stringify(body) })
     .then(function (r) { return r.text().then(function (t) {
-      if (!r.ok) throw new Error(t || ("HTTP " + r.status));
+      if (!r.ok) {
+        // Une page d'erreur HTML (celle de nginx) ne se lit pas dans un message.
+        const e = new Error(t && t.trim().charAt(0) !== "<" ? t : "HTTP " + r.status);
+        e.status = r.status;
+        throw e;
+      }
       return JSON.parse(t); }); });
 }
 
@@ -3115,6 +3120,22 @@ function opsRecharger(silencieux) {
   });
 }
 
+// -- lecture seule depuis Internet --------------------------------------------
+// Sur le VPS, nginx refuse /api/ops/envoyer et /api/ops/annuler (403) : un mot
+// de passe vole ne doit pas suffire a passer des ordres, et le robot du VPS est
+// le seul a en passer. La page le dit au lieu d'echouer : avant, "Envoyer"
+// affichait la page d'erreur de nginx et "Annuler" echouait sans un mot.
+const OPS_LOCAL = ["127.0.0.1", "localhost", "[::1]", "::1"].indexOf(location.hostname) >= 0;
+const OPS_LECTURE_SEULE =
+  "Lecture seule depuis Internet : c'est le robot du VPS qui passe les ordres, "
+  + "chaque soir de semaine a 15:00, heure de New York.";
+function opsLectureSeule() {
+  ["ops-envoyer", "ops-annuler", "ops-forcer"].forEach(function (id) { el(id).disabled = true; });
+  el("ops-message").className = "msg";
+  el("ops-message").textContent = OPS_LECTURE_SEULE;
+}
+if (!OPS_LOCAL) opsLectureSeule();
+
 // -- envoi, en deux temps ---------------------------------------------------
 el("ops-envoyer").onclick = function () {
   const d = opsEtatCourant;
@@ -3140,6 +3161,7 @@ el("ops-envoyer").onclick = function () {
       opsPlanifier(2000);
       return opsRecharger(true);
     }).catch(function (e) {
+      if (e.status === 403) { opsLectureSeule(); return; }
       el("ops-message").className = "msg err";
       el("ops-message").textContent = "Erreur : " + e.message;
     });
@@ -3152,6 +3174,10 @@ el("ops-annuler").onclick = function () {
     el("ops-message").className = r.ok ? "msg" : "msg err";
     el("ops-message").textContent = r.message;
     opsPlanifier(2000);
+  }).catch(function (e) {
+    if (e.status === 403) { opsLectureSeule(); return; }
+    el("ops-message").className = "msg err";
+    el("ops-message").textContent = "Erreur : " + e.message;
   });
 };
 

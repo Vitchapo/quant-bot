@@ -20,6 +20,15 @@ def test_les_cartes_du_compte_sont_dans_la_page():
         assert 'data-capital="%s"' % mode in page
 
 
+def test_depuis_internet_les_ordres_sont_en_lecture_seule():
+    """nginx refuse envoyer et annuler depuis Internet (403). La page grise les
+    boutons et dit pourquoi, au lieu d'afficher la page d'erreur de nginx."""
+    page = _page()
+    assert "Lecture seule depuis Internet" in page
+    assert "indexOf(location.hostname)" in page
+    assert page.count("if (e.status === 403) { opsLectureSeule(); return; }") == 2
+
+
 def test_aucun_gabarit_oublie():
     """Un __MARQUEUR__ non remplace casserait le script de la page."""
     for mode in ("live", "static"):
