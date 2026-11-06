@@ -302,16 +302,41 @@ Ils sont gardés, mais traduits pour un signal acheteur/vendeur.
 
 | # | critère | mesure | seuil | résultat |
 |---|---|---|---|---|
-| 1 | pouvoir prédictif | régression, sur tous les couples instrument-mois, du rendement du mois suivant sur celui des 12 derniers mois, tous deux divisés par la volatilité estimée ; constante commune, pas d'écrêtage ; écarts-types regroupés par mois | pente > 0, t > 2 | |
-| 2 | profil par groupes | mêmes couples rangés en 5 groupes égaux selon le rendement passé ; rendement moyen du mois suivant dans chaque groupe (tous deux divisés par la volatilité) | croissant du groupe 1 au groupe 5, au plus une inversion entre voisins, **et** groupe 5 − groupe 1 > 0 avec t > 2 (regroupé par mois) | |
-| 3 | mieux que l'exposition passive | rendements mensuels de la stratégie régressés sur ceux du portefeuille toujours acheteur (indices et métaux, même dosage) ; Newey-West, 3 retards | alpha > 0, t > 2 | |
-| 4 | test du hasard | 1 000 stratégies où, pour chaque instrument, les périodes acheteuses et vendeuses de la vraie stratégie (mêmes nombres, mêmes durées) sont replacées dans un ordre tiré au hasard ; Sharpe net de coûts | p < 0,05 | |
-| 5 | rendement net des coûts FTMO | moyenne des rendements mensuels nets | t > 2 (Newey-West, 3 retards) sur 2000-2026, **et** moyenne > 0 sur 2013-2026 | |
+| 1 | pouvoir prédictif | régression, sur tous les couples instrument-mois, du rendement du mois suivant sur celui des 12 derniers mois, tous deux divisés par la volatilité estimée ; constante commune, pas d'écrêtage ; écarts-types regroupés par mois | pente > 0, t > 2 | pente 0,0147, t = 1,72 : non |
+| 2 | profil par groupes | mêmes couples rangés en 5 groupes égaux selon le rendement passé ; rendement moyen du mois suivant dans chaque groupe (tous deux divisés par la volatilité) | croissant du groupe 1 au groupe 5, au plus une inversion entre voisins, **et** groupe 5 − groupe 1 > 0 avec t > 2 (regroupé par mois) | groupes 0,003 / −0,000 / 0,017 / 0,031 / 0,032 ; 1 inversion(s) ; 5 − 1 = 0,030, t = 1,23 : non |
+| 3 | mieux que l'exposition passive | rendements mensuels de la stratégie régressés sur ceux du portefeuille toujours acheteur (indices et métaux, même dosage) ; Newey-West, 3 retards | alpha > 0, t > 2 | alpha 0,567 % par mois, t = 1,91 (bêta 0,09) : non |
+| 4 | test du hasard | 1 000 stratégies où, pour chaque instrument, les périodes acheteuses et vendeuses de la vraie stratégie (mêmes nombres, mêmes durées) sont replacées dans un ordre tiré au hasard ; Sharpe net de coûts | p < 0,05 | Sharpe net −0,07 ; 1 tirages sur 1000 au moins aussi bons ; p = 0,0020 : **oui** |
+| 5 | rendement net des coûts FTMO | moyenne des rendements mensuels nets | t > 2 (Newey-West, 3 retards) sur 2000-2026, **et** moyenne > 0 sur 2013-2026 | −0,115 % par mois, t = −0,40 sur 321 mois ; 2013-2026 : −0,758 % par mois : non |
 
 Critères 1 à 3 : avant les coûts FTMO (spread, commission, marge sur les
 swaps) ; ils jugent l'information du signal. Critères 4 et 5 : après ces coûts.
 Critère 4 : p = (1 + nombre de tirages au moins aussi bons que la vraie
 stratégie) ÷ 1 001 ; graine du hasard `20261010`.
+
+### Résultat du 6 novembre 2026 : 1 sur 5
+
+Test lancé une seule fois, le 6 novembre 2026 à 21:02 UTC, sur le commit
+`c33bba4`. Sortie brute : `docs/tendance_sortie_brute.txt`. Décision prévue
+d'avance : **aucun paiement, et l'idée n'est pas retouchée.**
+
+- **Critères 1 à 3, ratés de peu.** Le signal va dans le bon sens : pente
+  positive, groupes presque croissants, alpha positif. Mais aucun n'est assez
+  net pour écarter le hasard : t = 1,72, 1,23 et 1,91, sous le seuil de 2.
+- **Critère 4, réussi.** Le vrai calendrier des positions fait mieux que 999
+  calendriers tirés au hasard sur 1 000, aux mêmes coûts (p = 0,002). Le
+  timing contient de l'information, mais pas assez pour gagner de l'argent.
+- **Critère 5, raté nettement.** Net des coûts FTMO : −0,115 % par mois sur
+  2000-2026, et −0,758 % par mois sur 2013-2026. Avant les coûts, la stratégie
+  gagnait 1,26 % par mois de 2000 à 2012, et seulement 0,09 % de 2013 à 2026 :
+  l'effet a presque disparu après sa publication. Les coûts FTMO, 0,77 % par
+  mois en moyenne, surtout les marges sur les swaps, dépassent ce que la
+  stratégie a rapporté avant coûts sur l'ensemble de la période.
+
+Pour la prochaine idée, qui aura son propre protocole et le seuil t > 2,5 :
+chez FTMO, au dosage de ce protocole (40 % de volatilité par position), garder
+les positions la nuit coûte environ 9 % du capital par an. Une stratégie qui
+garde ses positions des semaines doit faire nettement mieux que cela avant
+coûts, ou ne pas garder ses positions la nuit.
 
 ### Pourquoi ces traductions
 
@@ -404,5 +429,5 @@ réussit à peu près une fois sur deux.
 | 1 | relever les conditions FTMO dans MT5, remplir le tableau des coûts, committer | 6 novembre 2026 |
 | 2 | télécharger et contrôler les données, consigner empreintes et exclusions, committer | 30 octobre 2026 |
 | 3 | écrire le code et ses tests sur données synthétiques : sans signal, aucun avantage ; avec une tendance implantée, les critères la détectent ; modifier les cours futurs ne change aucune position passée | 30 octobre 2026 (`5b0b596`) |
-| 4 | lancer le test **une seule fois**, remplir la colonne « résultat », committer la sortie brute | |
-| 5 | appliquer la décision | |
+| 4 | lancer le test **une seule fois**, remplir la colonne « résultat », committer la sortie brute | 06/11/2026, score 1 sur 5 |
+| 5 | appliquer la décision | 6 novembre 2026 : aucun paiement |
