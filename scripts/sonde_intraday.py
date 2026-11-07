@@ -39,8 +39,11 @@ RACINE = Path(__file__).resolve().parent.parent
 SORTIE = RACINE / "data" / "intraday" / "sonde_mt5.csv"
 INDICES = ["US500", "GER40", "UK100", "JP225", "AUS200", "HK50"]
 PLAFOND_M30 = 500_000         # 40 ans de barres de 30 minutes, 23 h sur 24 : jamais atteint
-ESSAIS, PAUSE_S = 10, 5.0     # le terminal telecharge l'historique a la demande
+ESSAIS, PAUSE_S = 60, 5.0     # le terminal telecharge l'historique a la demande
 STABLE = 3                    # lectures identiques de suite : telechargement fini
+ESSAIS_TAILLE = 2             # lectures vides avant de demander moitie moins de barres
+MINIMUM = 1000                # la plus petite demande essayee
+BUDGET_S = 240                # par indice ; au-dela, on note ou on en est et on passe au suivant
 JOURS_DEBUT = 5               # jours regardes au debut de l'historique, en M5 et en M1
 COLONNES = ["sonde_utc", "instrument", "symbole", "limite_terminal", "barres_m30",
             "premiere_m30", "derniere_m30", "tronque", "m5_au_debut", "m1_au_debut", "note"]
@@ -50,28 +53,73 @@ def _date(t) -> datetime:
     return datetime.fromtimestamp(int(t), tz=timezone.utc)
 
 
-def _barres_m30(mt5, sym: str, limite: int, attendre):
-    """Les barres M30 que le terminal rend, une fois son telechargement fini.
+def dire(texte: str) -> None:
+    """Affiche tout de suite : la premiere sonde peut durer plusieurs minutes."""
+    print(texte, flush=True)
 
-    Le premier appel peut ne rendre que ce qui est deja sur le disque : on
-    redemande jusqu'a lire STABLE fois de suite le meme nombre de barres.
+
+def _barres_m30(mt5, sym: str, limite: int, attendre, horloge, dire) -> tuple:
+    """(barres, fini, demande) : les barres M30 que le terminal rend.
+
+    Deux etapes. D'abord trouver une demande que le terminal accepte : si
+    `limite` barres ne rendent rien, on redemande avec moitie moins, jusqu'a
+    MINIMUM (le 07/11, 100 000 barres demandees n'ont rien rendu pour aucun
+    indice, sans qu'on sache pourquoi). Ensuite attendre la fin du
+    telechargement : la premiere fois, le terminal va chercher des annees
+    d'historique minute chez FTMO, et chaque appel ne rend que ce qui est deja
+    arrive. On redemande jusqu'a lire STABLE fois de suite le meme nombre de
+    barres, dans la limite de BUDGET_S secondes. L'historique telecharge reste
+    sur le disque : une sonde relancee repart de la.
     """
-    lus, barres = [], None
-    for _ in range(ESSAIS):
-        barres = mt5.copy_rates_from_pos(sym, mt5.TIMEFRAME_M30, 0, limite)
-        lus.append(0 if barres is None else len(barres))
-        if len(lus) >= STABLE and lus[-1] > 0 and len(set(lus[-STABLE:])) == 1:
+    t0 = horloge()
+    demande, barres, essai = limite, None, 0
+
+    def lire():
+        nonlocal essai
+        essai += 1
+        b = mt5.copy_rates_from_pos(sym, mt5.TIMEFRAME_M30, 0, demande)
+        n = 0 if b is None else len(b)
+        erreur = "" if n else " (MT5 : %s)" % (mt5.last_error(),)
+        dire("    lecture %d : %d barres M30 sur %d demandees, %.0f s%s"
+             % (essai, n, demande, horloge() - t0, erreur))
+        return b, n
+
+    # 1. une demande que le terminal accepte
+    while True:
+        n = 0
+        for _ in range(ESSAIS_TAILLE):
+            barres, n = lire()
+            if n:
+                break
+            attendre(PAUSE_S)
+        if n or demande <= MINIMUM:
             break
+        demande = max(MINIMUM, demande // 2)
+    if not n:
+        return barres, True, demande
+    # 2. la fin du telechargement
+    lus = [n]
+    while essai < ESSAIS:
+        if len(lus) >= STABLE and len(set(lus[-STABLE:])) == 1:
+            return barres, True, demande
+        if horloge() - t0 > BUDGET_S:
+            return barres, False, demande
         attendre(PAUSE_S)
-    return barres
+        b, n = lire()
+        if n:
+            barres = b
+        lus.append(n)
+    return barres, False, demande
 
 
-def sonder(mt5, carte: dict, maintenant: datetime = None, attendre=time.sleep) -> list:
+def sonder(mt5, carte: dict, maintenant: datetime = None, attendre=time.sleep,
+           horloge=time.monotonic, dire=dire) -> list:
     """Une ligne par indice : profondeur de l'historique, rien d'autre."""
     maintenant = maintenant or datetime.now(timezone.utc)
     info = mt5.terminal_info()
     limite_terminal = int(getattr(info, "maxbars", 0) or 0)
     limite = min(limite_terminal, PLAFOND_M30) if limite_terminal > 0 else PLAFOND_M30
+    dire("Limite du terminal (Max bars in chart) : %s barres" % (limite_terminal or "inconnue"))
     lignes = []
     for nom in INDICES:
         sym = carte.get(nom)
@@ -82,19 +130,27 @@ def sonder(mt5, carte: dict, maintenant: datetime = None, attendre=time.sleep) -
         if not sym:
             ligne["note"] = "absent du catalogue"
             continue
+        dire("%s (%s) :" % (nom, sym))
         try:
             mt5.symbol_select(sym, True)
         except Exception:
             pass
-        barres = _barres_m30(mt5, sym, limite, attendre)
+        barres, fini, demande = _barres_m30(mt5, sym, limite, attendre, horloge, dire)
         n = 0 if barres is None else len(barres)
         ligne["barres_m30"] = n
+        if not fini:
+            ligne["note"] = ("telechargement pas fini apres %d s : relancer la sonde, "
+                             "elle repartira de la" % BUDGET_S)
         if n == 0:
-            ligne["note"] = "aucune barre rendue"
+            ligne["note"] = ligne["note"] or ("aucune barre rendue, meme pour %d demandees (MT5 : %s)"
+                                              % (demande, mt5.last_error(),))
             continue
+        if demande < limite:
+            ligne["note"] = (ligne["note"] + " ; " if ligne["note"] else "") + (
+                "le terminal n'a accepte que %d barres par demande" % demande)
         debut, fin = _date(barres["time"][0]), _date(barres["time"][-1])
         ligne.update(premiere_m30=debut.strftime("%Y-%m-%d"), derniere_m30=fin.strftime("%Y-%m-%d"),
-                     tronque="oui" if n >= limite else "non")
+                     tronque="oui" if n >= demande else "non")
         for champ, tf in (("m5_au_debut", mt5.TIMEFRAME_M5), ("m1_au_debut", mt5.TIMEFRAME_M1)):
             b = mt5.copy_rates_range(sym, tf, debut, debut + timedelta(days=JOURS_DEBUT))
             ligne[champ] = "oui" if b is not None and len(b) > 0 else "non"
@@ -112,16 +168,16 @@ def ecrire(lignes: list, chemin: Path = SORTIE) -> None:
 def afficher(lignes: list) -> None:
     if not lignes:
         return
-    limite = lignes[0]["limite_terminal"]
-    print("Limite du terminal (Max bars in chart) : %s barres" % (limite or "inconnue"))
+    print()
+    print("Resume :")
     for l in lignes:
+        if l["premiere_m30"]:
+            print("  %-7s %-12s M30 : %7d barres, du %s au %s%s ; M5 au debut : %s ; M1 au debut : %s"
+                  % (l["instrument"], l["symbole"], l["barres_m30"], l["premiere_m30"], l["derniere_m30"],
+                     "  (TRONQUE PAR LE TERMINAL)" if l["tronque"] == "oui" else "",
+                     l["m5_au_debut"], l["m1_au_debut"]))
         if l["note"]:
             print("  %-7s %-12s %s" % (l["instrument"], l["symbole"] or "-", l["note"]))
-            continue
-        print("  %-7s %-12s M30 : %7d barres, du %s au %s%s ; M5 au debut : %s ; M1 au debut : %s"
-              % (l["instrument"], l["symbole"], l["barres_m30"], l["premiere_m30"], l["derniere_m30"],
-                 "  (TRONQUE PAR LE TERMINAL)" if l["tronque"] == "oui" else "",
-                 l["m5_au_debut"], l["m1_au_debut"]))
     print()
     print("Si des dates semblent trop recentes, relancer la sonde : MT5 telecharge parfois")
     print("l'historique en plusieurs fois.")
@@ -138,6 +194,7 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
     os.chdir(RACINE)
     cfg = Config.load(args.config)
+    dire("Connexion a MT5...")
     try:
         # Lecture seule : la case "Algo Trading" du terminal n'est pas exigee.
         api = mt5broker.connecter(cfg, exiger_trading=False)
@@ -146,6 +203,8 @@ def main(argv=None) -> int:
         print(exc)
         print("-" * 72)
         return 2
+    dire("Connecte. La premiere fois, MT5 telecharge des annees d'historique : "
+         "compter quelques minutes par indice.")
     try:
         carte = api.construire_carte(INDICES)
         lignes = sonder(api._mt5, carte)

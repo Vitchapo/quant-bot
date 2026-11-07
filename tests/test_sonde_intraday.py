@@ -29,13 +29,16 @@ class FauxHistorique(faux_mt5.FauxMT5):
     """Un terminal dont chaque symbole a un historique commencant a une date donnee."""
     TIMEFRAME_M1, TIMEFRAME_M5, TIMEFRAME_M30 = 1, 5, 30
 
-    def __init__(self, debuts, maxbars=100_000, fins_m1=None, prets_apres=0):
+    def __init__(self, debuts, maxbars=100_000, fins_m1=None, prets_apres=0, sans_fin=False,
+                 refuse_au_dela=None):
         super().__init__()
         self.debuts = debuts                    # symbole -> premiere barre M30
         self.m1_depuis = fins_m1 or {}          # symbole -> premiere barre M5/M1, si plus tard
         self.maxbars = maxbars
         self.fin = datetime(2026, 11, 6, 21, 0, tzinfo=UTC)
         self.prets_apres = prets_apres          # appels avant que le telechargement soit fini
+        self.sans_fin = sans_fin                # chaque appel rend un peu plus : jamais fini
+        self.refuse_au_dela = refuse_au_dela    # une demande plus grosse ne rend rien
         self.appels = 0
 
     def terminal_info(self):
@@ -54,11 +57,16 @@ class FauxHistorique(faux_mt5.FauxMT5):
 
     def copy_rates_from_pos(self, sym, tf, pos, count):
         self.appels += 1
+        if self.refuse_au_dela and count > self.refuse_au_dela:
+            self._erreur = (-2, "Terminal: Invalid params")
+            return None
         b = self._barres(sym, tf, datetime(1990, 1, 1, tzinfo=UTC), self.fin)
         if b is None:
             return None
         if self.appels <= self.prets_apres:     # telechargement en cours : un bout seulement
             b = b[-1000:]
+        if self.sans_fin:
+            b = b[-1000 * self.appels:]
         limite = min(count, self.maxbars) if self.maxbars else count    # 0 : limite inconnue
         return b[max(0, len(b) - limite):]
 
@@ -101,7 +109,7 @@ def test_un_indice_absent_est_note_sans_planter():
     lignes = {l["instrument"]: l for l in S.sonder(mt5, {"US500": "US500.cash", "JP225": "JP225.cash"},
                                                    attendre=_sans_pause)}
     assert lignes["GER40"]["note"] == "absent du catalogue"
-    assert lignes["JP225"]["note"] == "aucune barre rendue"
+    assert lignes["JP225"]["note"].startswith("aucune barre rendue, meme pour 1000 demandees")
     assert lignes["US500"]["note"] == ""
 
 
@@ -114,3 +122,42 @@ def test_le_fichier_ne_contient_que_des_dates_et_des_comptes(tmp_path):
     assert len(lignes) == 6 and list(lignes[0]) == S.COLONNES
     assert not any(c in S.COLONNES for c in ("open", "high", "low", "close", "prix"))
     assert all("5000" not in v for l in lignes for v in l.values())     # aucun cours ne fuit
+
+
+def test_un_telechargement_trop_long_est_note_et_la_sonde_passe_au_suivant():
+    """Une horloge simulee : chaque lecture prend 100 s et rend un peu plus de barres."""
+    temps = [0.0]
+
+    def horloge():
+        temps[0] += 100.0
+        return temps[0]
+    mt5 = FauxHistorique({"US500.cash": datetime(2012, 1, 2, tzinfo=UTC),
+                          "GER40.cash": datetime(2012, 1, 2, tzinfo=UTC)}, maxbars=0, sans_fin=True)
+    vus = []
+    lignes = S.sonder(mt5, {"US500": "US500.cash", "GER40": "GER40.cash"}, attendre=_sans_pause,
+                      horloge=horloge, dire=vus.append)
+    us = lignes[0]
+    assert us["note"].startswith("telechargement pas fini") and us["premiere_m30"] != ""
+    assert lignes[1]["instrument"] == "GER40" and lignes[1]["barres_m30"] > 0   # le suivant est lu
+    assert sum(1 for v in vus if v.strip().startswith("lecture")) < 2 * S.ESSAIS
+
+
+def test_la_sonde_dit_ou_elle_en_est():
+    mt5 = FauxHistorique({"US500.cash": datetime(2016, 3, 1, tzinfo=UTC)}, prets_apres=1)
+    vus = []
+    S.sonder(mt5, {"US500": "US500.cash"}, attendre=_sans_pause, dire=vus.append)
+    assert vus[0].startswith("Limite du terminal")
+    assert "US500 (US500.cash) :" in vus
+    lectures = [v for v in vus if v.strip().startswith("lecture")]
+    assert len(lectures) >= S.STABLE and "barres M30" in lectures[0]
+
+
+def test_si_le_terminal_refuse_une_grosse_demande_la_sonde_demande_moins():
+    """Le 07/11, 100 000 barres demandees n'ont rien rendu pour aucun indice."""
+    mt5 = FauxHistorique({"US500.cash": datetime(2012, 1, 2, tzinfo=UTC)}, maxbars=100_000,
+                         refuse_au_dela=60_000)
+    vus = []
+    l = S.sonder(mt5, {"US500": "US500.cash"}, attendre=_sans_pause, dire=vus.append)[0]
+    assert l["barres_m30"] == 50_000 and l["tronque"] == "oui"
+    assert "n'a accepte que 50000 barres" in l["note"]
+    assert any("Invalid params" in v for v in vus)
