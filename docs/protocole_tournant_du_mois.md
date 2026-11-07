@@ -131,15 +131,53 @@ ouverte.
 
 | # | critère | mesure | seuil | résultat |
 |---|---|---|---|---|
-| 1 | l'effet existe | régression, sur tous les couples indice-jour, du rendement en excès du jour divisé par la volatilité estimée la veille, sur une variable valant 1 les jours de la fenêtre ; constante commune ; écarts-types regroupés par mois | coefficient > 0, t > 2,5 | |
-| 2 | partout, pas sur un seul marché | le même coefficient, estimé indice par indice | positif pour au moins 5 des 6 indices | |
-| 3 | mieux que l'exposition passive | rendements mensuels de la stratégie régressés sur ceux du portefeuille toujours acheteur des 6 indices (même dosage) ; Newey-West, 3 retards | alpha > 0, t > 2,5 | |
-| 4 | test du hasard | 1 000 stratégies où, chaque mois, la fenêtre de 4 séances est décalée d'un même nombre de séances pour tous les indices, tiré au hasard entre 4 et 14 ; Sharpe net de coûts | p < 0,01 | |
-| 5 | rendement net des coûts FTMO | moyenne des rendements mensuels nets | t > 2,5 (Newey-West, 3 retards) sur 2000-2026, **et** moyenne > 0 sur 2009-2026 | |
+| 1 | l'effet existe | régression, sur tous les couples indice-jour, du rendement en excès du jour divisé par la volatilité estimée la veille, sur une variable valant 1 les jours de la fenêtre ; constante commune ; écarts-types regroupés par mois | coefficient > 0, t > 2,5 | coefficient 0,0020, t = 1,27 : non |
+| 2 | partout, pas sur un seul marché | le même coefficient, estimé indice par indice | positif pour au moins 5 des 6 indices | 5 sur 6 (US500 0,0012 ; GER40 0,0024 ; UK100 0,0038 ; JP225 −0,0007 ; AUS200 0,0007 ; HK50 0,0044) : **oui** |
+| 3 | mieux que l'exposition passive | rendements mensuels de la stratégie régressés sur ceux du portefeuille toujours acheteur des 6 indices (même dosage) ; Newey-West, 3 retards | alpha > 0, t > 2,5 | alpha 0,234 % par mois, t = 1,12 (bêta 0,20) : non |
+| 4 | test du hasard | 1 000 stratégies où, chaque mois, la fenêtre de 4 séances est décalée d'un même nombre de séances pour tous les indices, tiré au hasard entre 4 et 14 ; Sharpe net de coûts | p < 0,01 | Sharpe net 0,11 ; 20 tirages sur 1000 au moins aussi bons ; p = 0,0210 : non |
+| 5 | rendement net des coûts FTMO | moyenne des rendements mensuels nets | t > 2,5 (Newey-West, 3 retards) sur 2000-2026, **et** moyenne > 0 sur 2009-2026 | 0,124 % par mois, t = 0,54 sur 321 mois ; 2009-2026 : −0,112 % par mois : non |
 
 Critères 1 à 3 : avant les coûts FTMO ; ils jugent l'effet. Critères 4 et 5 :
 après ces coûts. Critère 4 : p = (1 + nombre de tirages au moins aussi bons que
 la vraie stratégie) ÷ 1 001 ; graine du hasard `20261106`.
+
+### Résultat du 7 novembre 2026 : 1 sur 5
+
+Test lancé une seule fois, le 7 novembre 2026 à 10:03 UTC, sur le commit
+`17fef4c`. Sortie brute : `docs/tournant_sortie_brute.txt`. Décision prévue
+d'avance : **aucun paiement, et l'idée n'est pas retouchée.**
+
+- **Critère 1, raté.** Les jours de fenêtre rapportent un peu plus que les
+  autres : 0,03 écart-type quotidien, de l'ordre de 0,04 % par jour, moins de
+  la moitié de ce que trouvaient les études (environ 0,10 %). Avec t = 1,27,
+  c'est impossible à distinguer du hasard.
+- **Critère 2, réussi.** Le coefficient est positif pour 5 indices sur 6, mais
+  ne se distingue du hasard qu'à Hong Kong (t = 2,22), le marché où l'étude de
+  QuantSeeker trouvait l'effet le plus solide. Il est négatif au Japon.
+- **Critère 3, raté.** Alpha de 0,234 % par mois contre l'acheteur permanent,
+  t = 1,12.
+- **Critère 4, raté.** p = 0,021 : 20 tirages sur 1 000 font au moins aussi
+  bien, au-dessus du seuil de 0,01. Ce critère étant plus indulgent
+  qu'annoncé (limite mesurée et consignée avant le test dans
+  `src/quantbot/tournant.py`), ce p surestime encore la surprise.
+- **Critère 5, raté nettement.** Net des coûts FTMO : +0,124 % par mois sur
+  2000-2026 (t = 0,54), et −0,112 % par mois sur 2009-2026. Avant les coûts, la
+  stratégie gagnait 0,84 % par mois de 2000 à 2008, et seulement 0,15 % de
+  2009 à 2026 : comme la tendance, l'effet a presque disparu après sa
+  publication. Les coûts FTMO, 0,26 % par mois, prennent les deux tiers de ce
+  que la stratégie a rapporté avant coûts sur l'ensemble de la période.
+
+Avant le test, sur données synthétiques, un effet de 0,03 à 0,05 % par jour
+de fenêtre ne donnait 5 sur 5 que dans 6 à 22 % des cas : le résultat est
+celui qu'on pouvait attendre d'un effet affaibli.
+
+Pour la prochaine idée, qui aura son propre protocole et le seuil t > 2,5 :
+les deux effets publiés testés sur 2000-2026, la tendance et le tournant du
+mois, ont presque disparu après leur publication, et les coûts FTMO des
+positions gardées la nuit prennent l'essentiel de ce qui en reste. La
+prochaine idée doit reposer sur un mécanisme qui ne s'use pas en étant connu,
+par exemple des flux forcés, ou ne pas garder de positions la nuit, ou les
+deux.
 
 ### Pourquoi ces critères
 
@@ -203,5 +241,5 @@ Cette idée n'est pas retouchée.
 | 1 | coûts FTMO : ceux du protocole de tendance, déjà relevés et commités (`c33bba4`) | 7 novembre 2026, avec le protocole |
 | 2 | données : celles du protocole de tendance, déjà contrôlées et scellées (`5f3e492`) ; le test vérifie leurs empreintes | 7 novembre 2026, avec le protocole |
 | 3 | écrire le code et ses tests sur données synthétiques : sans effet, aucun avantage ; avec un effet implanté, les critères le détectent ; modifier les cours futurs ne change aucune position passée | 7 novembre 2026 |
-| 4 | lancer le test **une seule fois**, remplir la colonne « résultat », committer la sortie brute | |
-| 5 | appliquer la décision | |
+| 4 | lancer le test **une seule fois**, remplir la colonne « résultat », committer la sortie brute | 07/11/2026, score 1 sur 5 |
+| 5 | appliquer la décision | 7 novembre 2026 : aucun paiement |
