@@ -45,6 +45,7 @@ ESSAIS_TAILLE = 2             # lectures vides avant de demander moitie moins de
 MINIMUM = 1000                # la plus petite demande essayee
 BUDGET_S = 240                # par indice ; au-dela, on note ou on en est et on passe au suivant
 JOURS_DEBUT = 5               # jours regardes au debut de l'historique, en M5 et en M1
+DEBUT_PLAGE = datetime(2000, 1, 1, tzinfo=timezone.utc)
 COLONNES = ["sonde_utc", "instrument", "symbole", "limite_terminal", "barres_m30",
             "premiere_m30", "derniere_m30", "tronque", "m5_au_debut", "m1_au_debut", "note"]
 
@@ -58,58 +59,72 @@ def dire(texte: str) -> None:
     print(texte, flush=True)
 
 
-def _barres_m30(mt5, sym: str, limite: int, attendre, horloge, dire) -> tuple:
-    """(barres, fini, demande) : les barres M30 que le terminal rend.
+def _barres_m30(mt5, sym: str, limite: int, maintenant: datetime, attendre, horloge, dire) -> tuple:
+    """(barres, fini, demande, mode) : les barres M30 que le terminal rend.
 
-    Deux etapes. D'abord trouver une demande que le terminal accepte : si
-    `limite` barres ne rendent rien, on redemande avec moitie moins, jusqu'a
-    MINIMUM (le 07/11, 100 000 barres demandees n'ont rien rendu pour aucun
-    indice, sans qu'on sache pourquoi). Ensuite attendre la fin du
-    telechargement : la premiere fois, le terminal va chercher des annees
-    d'historique minute chez FTMO, et chaque appel ne rend que ce qui est deja
-    arrive. On redemande jusqu'a lire STABLE fois de suite le meme nombre de
-    barres, dans la limite de BUDGET_S secondes. L'historique telecharge reste
-    sur le disque : une sonde relancee repart de la.
+    Trois etapes.
+      1. Toute la plage depuis 2000 (copy_rates_range) : pas de nombre de
+         barres a deviner.
+      2. Si le terminal ne rend rien, un nombre de barres (copy_rates_from_pos),
+         divise par deux jusqu'a MINIMUM. Le 07/11, 100 000 barres demandees
+         ont rendu "Invalid params" pour chaque indice.
+      3. La fin du telechargement : la premiere fois, le terminal va chercher
+         des annees d'historique minute chez FTMO, et chaque appel ne rend que
+         ce qui est deja arrive. On redemande jusqu'a lire STABLE fois de
+         suite le meme nombre de barres, dans la limite de BUDGET_S secondes.
+         L'historique telecharge reste sur le disque : une sonde relancee
+         repart de la.
     """
     t0 = horloge()
-    demande, barres, essai = limite, None, 0
+    etat = {"essai": 0, "demande": limite, "mode": "plage"}
 
     def lire():
-        nonlocal essai
-        essai += 1
-        b = mt5.copy_rates_from_pos(sym, mt5.TIMEFRAME_M30, 0, demande)
+        etat["essai"] += 1
+        if etat["mode"] == "plage":
+            b = mt5.copy_rates_range(sym, mt5.TIMEFRAME_M30, DEBUT_PLAGE, maintenant)
+            quoi = "depuis %d" % DEBUT_PLAGE.year
+        else:
+            b = mt5.copy_rates_from_pos(sym, mt5.TIMEFRAME_M30, 0, etat["demande"])
+            quoi = "sur %d demandees" % etat["demande"]
         n = 0 if b is None else len(b)
         erreur = "" if n else " (MT5 : %s)" % (mt5.last_error(),)
-        dire("    lecture %d : %d barres M30 sur %d demandees, %.0f s%s"
-             % (essai, n, demande, horloge() - t0, erreur))
+        dire("    lecture %d : %d barres M30 %s, %.0f s%s" % (etat["essai"], n, quoi, horloge() - t0, erreur))
         return b, n
 
-    # 1. une demande que le terminal accepte
-    while True:
-        n = 0
+    def premiere_reponse():
+        n, b = 0, None
         for _ in range(ESSAIS_TAILLE):
-            barres, n = lire()
+            b, n = lire()
             if n:
                 break
             attendre(PAUSE_S)
-        if n or demande <= MINIMUM:
-            break
-        demande = max(MINIMUM, demande // 2)
+        return b, n
+
+    # 1. toute la plage
+    barres, n = premiere_reponse()
+    # 2. sinon, un nombre de barres que le terminal accepte
     if not n:
-        return barres, True, demande
-    # 2. la fin du telechargement
+        etat["mode"] = "nombre"
+        while True:
+            barres, n = premiere_reponse()
+            if n or etat["demande"] <= MINIMUM:
+                break
+            etat["demande"] = max(MINIMUM, etat["demande"] // 2)
+    if not n:
+        return barres, True, etat["demande"], etat["mode"]
+    # 3. la fin du telechargement
     lus = [n]
-    while essai < ESSAIS:
+    while etat["essai"] < ESSAIS:
         if len(lus) >= STABLE and len(set(lus[-STABLE:])) == 1:
-            return barres, True, demande
+            return barres, True, etat["demande"], etat["mode"]
         if horloge() - t0 > BUDGET_S:
-            return barres, False, demande
+            return barres, False, etat["demande"], etat["mode"]
         attendre(PAUSE_S)
         b, n = lire()
         if n:
             barres = b
         lus.append(n)
-    return barres, False, demande
+    return barres, False, etat["demande"], etat["mode"]
 
 
 def sonder(mt5, carte: dict, maintenant: datetime = None, attendre=time.sleep,
@@ -135,7 +150,7 @@ def sonder(mt5, carte: dict, maintenant: datetime = None, attendre=time.sleep,
             mt5.symbol_select(sym, True)
         except Exception:
             pass
-        barres, fini, demande = _barres_m30(mt5, sym, limite, attendre, horloge, dire)
+        barres, fini, demande, mode = _barres_m30(mt5, sym, limite, maintenant, attendre, horloge, dire)
         n = 0 if barres is None else len(barres)
         ligne["barres_m30"] = n
         if not fini:
@@ -145,7 +160,7 @@ def sonder(mt5, carte: dict, maintenant: datetime = None, attendre=time.sleep,
             ligne["note"] = ligne["note"] or ("aucune barre rendue, meme pour %d demandees (MT5 : %s)"
                                               % (demande, mt5.last_error(),))
             continue
-        if demande < limite:
+        if mode == "nombre" and demande < limite:
             ligne["note"] = (ligne["note"] + " ; " if ligne["note"] else "") + (
                 "le terminal n'a accepte que %d barres par demande" % demande)
         debut, fin = _date(barres["time"][0]), _date(barres["time"][-1])
