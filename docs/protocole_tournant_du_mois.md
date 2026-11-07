@@ -199,9 +199,9 @@ Cette idée n'est pas retouchée.
 
 | # | étape | fait le |
 |---|---|---|
-| 0 | relire, valider, committer et pousser ce protocole | |
-| 1 | coûts FTMO : ceux du protocole de tendance, déjà relevés et commités (`c33bba4`) | |
-| 2 | données : celles du protocole de tendance, déjà contrôlées et scellées (`5f3e492`) ; le test vérifie leurs empreintes | |
-| 3 | écrire le code et ses tests sur données synthétiques : sans effet, aucun avantage ; avec un effet implanté, les critères le détectent ; modifier les cours futurs ne change aucune position passée | |
+| 0 | relire, valider, committer et pousser ce protocole | 7 novembre 2026 (`58def69`) |
+| 1 | coûts FTMO : ceux du protocole de tendance, déjà relevés et commités (`c33bba4`) | 7 novembre 2026, avec le protocole |
+| 2 | données : celles du protocole de tendance, déjà contrôlées et scellées (`5f3e492`) ; le test vérifie leurs empreintes | 7 novembre 2026, avec le protocole |
+| 3 | écrire le code et ses tests sur données synthétiques : sans effet, aucun avantage ; avec un effet implanté, les critères le détectent ; modifier les cours futurs ne change aucune position passée | 7 novembre 2026 |
 | 4 | lancer le test **une seule fois**, remplir la colonne « résultat », committer la sortie brute | |
 | 5 | appliquer la décision | |
