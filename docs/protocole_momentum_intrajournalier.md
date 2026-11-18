@@ -198,6 +198,72 @@ la vraie stratégie) ÷ 1 001 ; graine du hasard `20261118`. Si un indice est
 exclu à l'étape 2, le critère 2 demande que la pente soit positive pour tous
 les indices restants sauf un.
 
+### Arrêt à l'étape 2, le 18 novembre 2026 : le test n'est pas lancé
+
+Les barres ont été téléchargées et scellées le 18 novembre 2026 par
+`scripts/donnees_intraday.py` (commit `8d928b8`), avec les empreintes du
+tableau ci-dessous. Le contrôle de l'heure du serveur a échoué : la barre de
+9:30 a le plus gros volume pour 64,9 % des 1 451 séances qui ont des barres
+entre 8:00 et 12:00 à New York, et pour 71,2 % des 104 séances des semaines
+de décalage, sous le seuil de 90 %. Comme écrit, l'étape 2 s'arrête là :
+**le test n'est pas lancé**, et aucun résultat de la stratégie n'a été
+calculé. La colonne « résultat » reste vide.
+
+L'échec vient de deux erreurs de préparation, pas de l'hypothèse.
+
+1. **L'historique de 30 minutes est bien plus court qu'annoncé.** La sonde a
+   vérifié qu'il y avait des barres au début de l'historique, pas qu'elles
+   duraient 30 minutes. Jusqu'au 20 janvier 2021, le serveur FTMO ne garde
+   qu'une barre par jour (jusqu'au 17 mai 2021 pour GER40, jusqu'au
+   2 décembre 2020 pour HK50), puis des barres d'une heure. Les barres de
+   30 minutes ne commencent qu'à la mi-septembre 2021 (le 28 décembre 2021
+   pour GER40) ; seul AUS200 les a dès février 2019. D'où 33 à 41 % de barres
+   de fenêtre manquantes pour cinq indices, qui seraient exclus pour cette
+   seule raison.
+2. **Le seuil de 90 % était mal calibré.** Sur 2022-2026, où l'historique est
+   complet, les volumes confirment l'heure annoncée : le volume médian triple
+   à 9:30 (heure de New York si le serveur est à New York + 7 heures), en
+   hiver comme en été, et retombe après 16:00. Mais la barre de 10:00 a
+   souvent plus de ticks que celle de 9:30, qui ne l'emporte que dans 68 à
+   74 % des séances. Pendant les semaines de décalage, elle l'emporte dans
+   79 % des séances ; une heure du serveur réglée sur l'Europe aurait déplacé
+   le pic vers 8:30 ou 10:30, qui ne l'emportent que dans 3 % et 1 % des
+   séances. Le seuil supposait un profil de volumes qui n'avait pas été
+   mesuré.
+
+AUS200, le seul indice à l'historique complet, aurait été exclu de toute
+façon : deux sauts dans la fenêtre, les 17 et 24 mars 2020, ne sont pas
+corroborés par Yahoo. En plein krach, le CFD et l'indice ont différé de 1,8 %
+et de 2,0 % à la clôture.
+
+| fichier brut | empreinte SHA-256 | barres | première barre | dernière barre | barres de fenêtre manquantes | décision |
+|---|---|---|---|---|---|---|
+| `ftmo_US500_cash_M30.csv` | `74c6f0f17fdb7d74b593b876211f694e60904564145c97450422dd605a3fdb27` | 65 206 | 29/12/2017 | 30/10/2026 | 888 sur 2 159 séances jugées (41,1 %) | **exclu** : barre de fenêtre manquante pour 41,1 % des séances jugées |
+| `ftmo_GER40_cash_M30.csv` | `cf09c298a4a8ba946e9e6f0171548c7ccd72def9ce3e26b5769719f581bb1698` | 60 616 | 28/12/2017 | 30/10/2026 | 787 sur 2 180 séances jugées (36,1 %) | **exclu** : barre de fenêtre manquante pour 36,1 % des séances jugées |
+| `ftmo_UK100_cash_M30.csv` | `f0753dcb7e18998236f9870dd95974b915ac8e051953fff376978091bceb693e` | 63 826 | 28/12/2017 | 30/10/2026 | 715 sur 2 168 séances jugées (33,0 %) | **exclu** : barre de fenêtre manquante pour 33,0 % des séances jugées |
+| `ftmo_JP225_cash_M30.csv` | `8ab75525b7b6e97662a7cba2ba0ee6f809274e7587c82a3c3135cb29cf8dc8af` | 65 290 | 28/12/2017 | 30/10/2026 | 850 sur 2 094 séances jugées (40,6 %) | **exclu** : barre de fenêtre manquante pour 40,6 % des séances jugées |
+| `ftmo_AUS200_cash_M30.csv` | `0e71c6733730ba64f0bc88008119ae7a92b433a32d12a53c1dc1ab402aaeb9f4` | 85 419 | 08/02/2019 | 30/10/2026 | 35 sur 1 957 séances jugées (1,8 %) | **exclu** : saut dans la fenêtre du 17/03/2020 (+2,5 %, 15 écarts-types), non corroboré (écart avec Yahoo 1,80 %, avec la barre d'avant 0,00 %) ; saut dans la fenêtre du 24/03/2020 (+1,7 %, 10 écarts-types), non corroboré (écart avec Yahoo 2,01 %, avec la barre d'avant 0,00 %) |
+| `ftmo_HK50_cash_M30.csv` | `9deaf7c1eb4c9abb19d1c2265d62ca8ee7e334e70f15caa08003ed430bde15fa` | 55 436 | 17/12/2018 | 30/10/2026 | 686 sur 1 935 séances jugées (35,5 %) | **exclu** : barre de fenêtre manquante pour 35,5 % des séances jugées |
+
+Ce que l'étape 2 a montré des cours, à citer par tout protocole qui
+reprendrait l'hypothèse : six mouvements de fenêtre de plus de 10
+écarts-types, tous des jours de krach connus (GER40 −1,95 % et UK100 −2,14 %
+le 7 avril 2025 ; JP225 −2,78 % le 5 août 2024 ; AUS200 +2,50 %, +2,61 % et
++1,65 % les 17, 18 et 24 mars 2020), et la corrélation de chaque indice avec
+Yahoo, de clôture à clôture (0,962 à 0,998). Rien n'a été calculé sur le lien
+entre r_RJ et r_DD.
+
+**Décision : aucun paiement.** La règle était écrite d'avance et s'applique,
+même si l'heure du serveur était la bonne. L'hypothèse, elle, n'a pas été
+testée : rien ne la confirme ni ne l'infirme. La reprendre demanderait un
+nouveau protocole, sur un historique de 30 minutes complet, avec un contrôle
+d'horloge calibré avant d'être figé.
+
+Pour les prochains protocoles : une sonde de données compte les barres par
+jour, au lieu de vérifier seulement qu'il y en a ; et le seuil d'un contrôle
+qui dépend du comportement du marché se mesure sur un échantillon récent
+avant d'être figé, au lieu d'être supposé.
+
 ### Pourquoi ces critères
 
 - **Critère 1.** Il mesure l'effet lui-même, sur toutes les séances, sans
@@ -262,12 +328,12 @@ Cette idée n'est pas retouchée.
 
 | # | étape | fait le |
 |---|---|---|
-| 0 | relire, valider, committer et pousser ce protocole | |
-| 1 | coûts : relever les spreads FTMO aux heures exactes d'entrée et de sortie (historique de ticks), consigner le tableau, committer | |
-| 2 | données : télécharger une fois les barres de 30 minutes, contrôler (heure du serveur, barres manquantes, cours figés, sauts), consigner empreintes et exclusions, committer | |
-| 3 | écrire le code et ses tests sur données synthétiques : sans effet, aucun avantage ; avec un effet implanté, les critères le détectent ; modifier les cours futurs ne change aucune position passée ; le test du hasard se trompe au taux annoncé | |
-| 4 | lancer le test **une seule fois**, remplir la colonne « résultat », committer la sortie brute | |
-| 5 | appliquer la décision | |
+| 0 | relire, valider, committer et pousser ce protocole | 18 novembre 2026 (`444c403`) |
+| 1 | coûts : relever les spreads FTMO aux heures exactes d'entrée et de sortie (historique de ticks), consigner le tableau, committer | sans objet : l'étape 2 a arrêté le protocole |
+| 2 | données : télécharger une fois les barres de 30 minutes, contrôler (heure du serveur, barres manquantes, cours figés, sauts), consigner empreintes et exclusions, committer | 18 novembre 2026 : arrêtée, contrôle de l'heure du serveur en échec |
+| 3 | écrire le code et ses tests sur données synthétiques : sans effet, aucun avantage ; avec un effet implanté, les critères le détectent ; modifier les cours futurs ne change aucune position passée ; le test du hasard se trompe au taux annoncé | sans objet |
+| 4 | lancer le test **une seule fois**, remplir la colonne « résultat », committer la sortie brute | sans objet : le test n'est pas lancé |
+| 5 | appliquer la décision | 18 novembre 2026 : aucun paiement |
 
 Exclusion d'un indice à l'étape 2 : si sa barre de fenêtre manque pour plus de
 5 % de ses séances de la période jugée, ou si ses cours ont un défaut que rien
