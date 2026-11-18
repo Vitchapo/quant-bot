@@ -17,10 +17,15 @@ elle-meme. Pour chaque indice et chaque annee, de 2010 a 2026 :
     fichier de ses minutes, ses minutes actives (volume > 0) sur 1 440, celles
     de la fenetre (les 30 minutes avant la cloture du marche au comptant) ;
   - le rapport entre le volume des 30 minutes qui suivent l'ouverture du
-    marche au comptant et celui des 30 minutes qui la precedent. Si l'heure
-    des bougies est juste, l'ouverture se voit : le rapport depasse 1, en
-    hiver comme en ete.
-Puis le premier jour qui a des minutes, cherche jour par jour.
+    marche au comptant et celui des 30 minutes qui la precedent, et le meme
+    rapport une heure plus tot et une heure plus tard. Si l'heure des bougies
+    est juste, le pic est a l'ouverture : son rapport median depasse les deux
+    autres, chaque annee. C'est le controle d'heure prevu pour l'etape 2 du
+    nouveau protocole : la sonde le verifie sur son echantillon avant qu'il
+    soit fige.
+Puis le premier jour qui a des minutes, cherche jour par jour. L'indice
+australien est sonde sous ses deux noms : AUS.IDX/AUD, et AUD.IDX/AUD, que
+Dukascopy donne pour arrete.
 
 Il n'ecrit et n'affiche AUCUN cours : des dates, des comptes et des rapports
 de volumes. Les cours des fichiers sont jetes des leur lecture. Sortie :
@@ -50,8 +55,9 @@ from quantbot import tendance_donnees as TD
 RACINE = Path(__file__).resolve().parent.parent
 SORTIE = RACINE / "data" / "intraday" / "sonde_dukascopy.csv"
 BASE = "https://datafeed.dukascopy.com/datafeed/"
-CODES = {"US500": "USA500IDXUSD", "GER40": "DEUIDXEUR", "UK100": "GBRIDXGBP",
-         "JP225": "JPNIDXJPY", "AUS200": "AUSIDXAUD", "HK50": "HKGIDXHKD"}
+#: Les noms Dukascopy de chaque indice (deux pour l'Australie).
+CODES = {"US500": ("USA500IDXUSD",), "GER40": ("DEUIDXEUR",), "UK100": ("GBRIDXGBP",),
+         "JP225": ("JPNIDXJPY",), "AUS200": ("AUSIDXAUD", "AUDIDXAUD"), "HK50": ("HKGIDXHKD",)}
 #: Ouverture du marche au comptant, heure locale.
 OUVERTURES = {"US500": "09:30", "GER40": "09:00", "UK100": "08:00", "JP225": "09:00",
               "AUS200": "10:00", "HK50": "09:30"}
@@ -62,9 +68,11 @@ PAUSE_S = 0.1
 ESSAIS = 3
 BOUGIE = np.dtype([("t", ">i4"), ("o", ">i4"), ("c", ">i4"), ("l", ">i4"), ("h", ">i4"), ("v", ">f4")])
 DEMI = pd.Timedelta(minutes=30)
+HEURE = pd.Timedelta(hours=1)
 COLONNES = ["sonde_utc", "instrument", "code", "annee", "jours_quotidiens", "seances_sondees",
             "avec_minutes", "minutes_actives_mediane", "fenetres_completes", "fenetre_actives_mediane",
-            "rapport_ouverture_median", "premier_jour_minutes"]
+            "rapport_une_heure_avant_median", "rapport_ouverture_median", "rapport_une_heure_apres_median",
+            "pic_a_l_ouverture", "premier_jour_minutes"]
 
 
 def dire(texte: str) -> None:
@@ -208,12 +216,26 @@ def seances_sondees(seances, annee: int) -> list:
     return out
 
 
-def mesurer(src: Source, indice: str, seance) -> dict:
+def rapport(src: Source, code: str, o) -> float:
+    """Volume des 30 minutes qui suivent `o` / volume des 30 minutes qui le precedent."""
+    x = src.intervalle(code, o - DEMI, o + DEMI)
+    if x is None:
+        return float("nan")
+    t, v = x
+    avant, apres = v[np.asarray(t < o)].sum(), v[np.asarray(t >= o)].sum()
+    if avant > 0:
+        return float(apres / avant)
+    return float("inf") if apres > 0 else float("nan")       # rien avant : le pic se voit aussi
+
+
+def mesurer(src: Source, indice: str, seance, code: str = None) -> dict:
     """Les comptes d'une seance : minutes actives du jour UTC, de la fenetre, et l'ouverture."""
-    code = CODES[indice]
+    code = code or CODES[indice][0]
     j = src.jour(code, seance)
+    nan = float("nan")
     out = {"seance": seance, "avec_minutes": j is not None and len(j[1]) > 0, "actives": 0,
-           "fenetre_actives": 0, "fenetre_complete": False, "rapport_ouverture": float("nan")}
+           "fenetre_actives": 0, "fenetre_complete": False,
+           "rapport_avant": nan, "rapport_ouverture": nan, "rapport_apres": nan}
     if not out["avec_minutes"]:
         return out
     out["actives"] = int((j[1] > 0).sum())
@@ -225,15 +247,18 @@ def mesurer(src: Source, indice: str, seance) -> dict:
         out["fenetre_actives"] = len(actives)
         out["fenetre_complete"] = debut in actives and (fin - pd.Timedelta(minutes=1)) in actives
     o = en_utc(indice, seance, OUVERTURES[indice])
-    x = src.intervalle(code, o - DEMI, o + DEMI)
-    if x is not None:
-        t, v = x
-        avant, apres = v[np.asarray(t < o)].sum(), v[np.asarray(t >= o)].sum()
-        if avant > 0:
-            out["rapport_ouverture"] = float(apres / avant)
-        elif apres > 0:
-            out["rapport_ouverture"] = float("inf")          # rien avant l'ouverture : elle se voit aussi
+    out["rapport_avant"] = rapport(src, code, o - HEURE)
+    out["rapport_ouverture"] = rapport(src, code, o)
+    out["rapport_apres"] = rapport(src, code, o + HEURE)
     return out
+
+
+def pic(m: list) -> str:
+    """"oui" si le rapport median est plus eleve a l'ouverture qu'une heure avant et apres."""
+    r = [_mediane([x[k] for x in m]) for k in ("rapport_avant", "rapport_ouverture", "rapport_apres")]
+    if any(np.isnan(x) for x in r):
+        return ""
+    return "oui" if r[1] > r[0] and r[1] > r[2] else "non"
 
 
 def premier_jour(src: Source, code: str, seances, sans, avec):
@@ -254,23 +279,25 @@ def premier_jour(src: Source, code: str, seances, sans, avec):
 def sonder(src: Source, calendrier: dict, maintenant=None, dire=dire) -> list:
     maintenant = maintenant or pd.Timestamp.now(tz="UTC")
     lignes = []
-    for n in I.INDICES:
-        code = CODES[n]
+    for n, code in [(n, c) for n in I.INDICES for c in CODES[n]]:
         seances = calendrier[n].index
         seances = seances[seances <= FIN]
         dire("%s (%s) :" % (n, code))
         mesures, par_annee = [], {}
         for a in ANNEES:
             q = src.quotidiens(code, a)
-            m = [mesurer(src, n, s) for s in seances_sondees(seances, a)]
+            m = [mesurer(src, n, s, code) for s in seances_sondees(seances, a)]
             mesures += m
             par_annee[a] = (q, m)
             avec = [x for x in m if x["avec_minutes"]]
             dire("    %d : %s jours quotidiens ; minutes %d/%d seances%s"
                  % (a, "-" if q is None else q, len(avec), len(m),
-                    "" if not avec else " ; %d minutes actives par jour ; fenetre complete %d/%d ; ouverture x%.1f"
+                    "" if not avec else " ; %d minutes actives par jour ; fenetre complete %d/%d ; "
+                    "ouverture x%.1f (une heure avant x%.1f, apres x%.1f) ; pic a l'ouverture : %s"
                     % (np.median([x["actives"] for x in avec]), sum(x["fenetre_complete"] for x in avec),
-                       len(avec), _mediane([x["rapport_ouverture"] for x in avec]))))
+                       len(avec), _mediane([x["rapport_ouverture"] for x in avec]),
+                       _mediane([x["rapport_avant"] for x in avec]), _mediane([x["rapport_apres"] for x in avec]),
+                       pic(avec) or "?")))
         avec = [x["seance"] for x in mesures if x["avec_minutes"]]
         sans = [x["seance"] for x in mesures if not x["avec_minutes"] and (not avec or x["seance"] < min(avec))]
         premier = None
@@ -288,7 +315,10 @@ def sonder(src: Source, calendrier: dict, maintenant=None, dire=dire) -> list:
                 "fenetres_completes": sum(x["fenetre_complete"] for x in avec_a),
                 "fenetre_actives_mediane": (int(np.median([x["fenetre_actives"] for x in avec_a]))
                                             if avec_a else ""),
+                "rapport_une_heure_avant_median": _texte(_mediane([x["rapport_avant"] for x in avec_a])),
                 "rapport_ouverture_median": _texte(_mediane([x["rapport_ouverture"] for x in avec_a])),
+                "rapport_une_heure_apres_median": _texte(_mediane([x["rapport_apres"] for x in avec_a])),
+                "pic_a_l_ouverture": pic(avec_a) if avec_a else "",
                 "premier_jour_minutes": "" if premier is None else premier.strftime("%Y-%m-%d")})
     return lignes
 

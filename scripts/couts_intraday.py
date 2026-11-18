@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
 """Etape 1 du protocole du momentum intrajournalier : les spreads FTMO aux heures exactes.
 
+Le protocole est celui de l'historique Dukascopy
+(docs/protocole_momentum_intrajournalier_dukascopy.md). Celui du 18 novembre
+2026 s'est arrete a son etape 2 sans que l'etape 1 ait ete faite.
+
     python scripts/couts_intraday.py            # releve et affiche ; n'ecrit rien
     python scripts/couts_intraday.py --ecrire   # ecrit aussi docs/intraday_couts.csv
                                                 # et le tableau des couts dans le protocole
 
-Ce que demande docs/protocole_momentum_intrajournalier.md ("Les couts FTMO") :
+Ce que demande le protocole ("Les couts FTMO") :
 le spread retenu, par indice, pour l'entree et pour la sortie separement, est
 le plus eleve de
   1. la mediane, sur les 60 dernieres seances de l'historique de ticks FTMO,
@@ -28,6 +32,8 @@ Comment c'est mesure :
   * Heures : celles du serveur FTMO (New York + 7 h), changements d'heure des
     deux cotes compris (quantbot.intraday_donnees).
 Lecture seule : aucun ordre, aucun cours de cloture lu, aucun rendement calcule.
+Avec --ecrire, le protocole doit etre commite et pousse : sa date fait foi, et
+les couts sont releves apres.
 """
 from __future__ import annotations
 
@@ -51,7 +57,7 @@ from quantbot import tendance_donnees as TD
 from quantbot.config import Config
 
 RACINE = Path(__file__).resolve().parent.parent
-PROTOCOLE = RACINE / "docs" / "protocole_momentum_intrajournalier.md"
+PROTOCOLE = RACINE / "docs" / "protocole_momentum_intrajournalier_dukascopy.md"
 TENDANCE = RACINE / "docs" / "protocole_tendance_multi_actifs.md"
 COUTS_TENDANCE = RACINE / "docs" / "tendance_couts.csv"
 SORTIE = RACINE / "docs" / "intraday_couts.csv"
@@ -279,6 +285,8 @@ def main(argv=None) -> int:
     os.chdir(RACINE)
     seances, transactions, problemes = preparer(PROTOCOLE, TENDANCE, BRUT_TENDANCE, COUTS_TENDANCE,
                                                 ecrire=args.ecrire)
+    if args.ecrire:                         # etape 0 avant etape 1 : le protocole d'abord, commite et pousse
+        problemes += TT.verifier_git(RACINE, [PROTOCOLE])[1]
     if problemes:
         print("PAS PRET :")
         for p in problemes:

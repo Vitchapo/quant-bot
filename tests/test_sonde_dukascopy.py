@@ -78,7 +78,7 @@ class Serveur:
 
 def volume_normal(code, minutes):
     """Un marche qui cote toute la journee, avec un pic a l'ouverture du marche au comptant."""
-    n = {v: k for k, v in S.CODES.items()}[code]
+    n = {c: k for k, v in S.CODES.items() for c in v}[code]
     v = np.full(len(minutes), 100.0)
     for j in (minutes[0], minutes[0] + pd.Timedelta(days=1)):     # l'ouverture locale peut tomber la veille en UTC
         o = S.en_utc(n, j, S.OUVERTURES[n])
@@ -124,6 +124,17 @@ def test_la_fenetre_et_l_ouverture_sont_lues_a_la_bonne_heure_utc():
     m = S.mesurer(_source(Serveur(volume_normal)), "US500", T("2024-03-13"))
     assert m["avec_minutes"] and m["actives"] == 1440 and m["fenetre_actives"] == 30 and m["fenetre_complete"]
     assert m["rapport_ouverture"] == pytest.approx(3.0)
+    assert m["rapport_avant"] == pytest.approx(1.0) and m["rapport_apres"] == pytest.approx(1.0)
+    assert S.pic([m]) == "oui"
+
+
+def test_un_pic_une_heure_trop_tard_fait_echouer_le_controle_d_heure():
+    """Des bougies decalees d'une heure : le pic n'est plus a l'ouverture."""
+    def decale(code, minutes):
+        return volume_normal(code, minutes - pd.Timedelta(hours=1))
+    m = S.mesurer(_source(Serveur(decale)), "GER40", T("2024-01-10"))
+    assert m["rapport_apres"] == pytest.approx(3.0) and m["rapport_ouverture"] == pytest.approx(1.0)
+    assert S.pic([m]) == "non"
 
 
 def test_une_ouverture_a_cheval_sur_minuit_utc_lit_le_fichier_de_la_veille():
@@ -164,16 +175,19 @@ def _calendrier():
 
 def test_la_sonde_trouve_le_premier_jour_et_ne_sort_aucun_cours(tmp_path, monkeypatch):
     monkeypatch.setattr(S, "ANNEES", (2011, 2012, 2013, 2014, 2015, 2016, 2026))
-    depuis = {"USA500IDXUSD": "2012-06-07", "HKGIDXHKD": "2015-02-10"}
+    depuis = {"USA500IDXUSD": "2012-06-07", "HKGIDXHKD": "2015-02-10", "AUDIDXAUD": "2099-01-01"}
     serveur = Serveur(volume_normal, depuis=depuis)
     vus = []
     lignes = S.sonder(_source(serveur), _calendrier(), maintenant=T("2026-11-19", tz="UTC"), dire=vus.append)
-    assert len(lignes) == 6 * len(S.ANNEES)
+    assert len(lignes) == 7 * len(S.ANNEES)                         # l'Australie sous ses deux noms
     us = {l["annee"]: l for l in lignes if l["instrument"] == "US500"}
     assert us[2011]["avec_minutes"] == 0 and us[2011]["rapport_ouverture_median"] == ""
     assert us[2013]["avec_minutes"] == 12 and us[2013]["fenetres_completes"] == 12
     assert us[2012]["premier_jour_minutes"] == "2012-06-07"
     assert us[2013]["minutes_actives_mediane"] == 1440 and us[2013]["rapport_ouverture_median"] == "3.00"
+    assert us[2013]["rapport_une_heure_avant_median"] == "1.00" and us[2013]["pic_a_l_ouverture"] == "oui"
+    au = {(l["code"], l["annee"]): l for l in lignes if l["instrument"] == "AUS200"}
+    assert au[("AUSIDXAUD", 2013)]["avec_minutes"] == 12 and au[("AUDIDXAUD", 2013)]["avec_minutes"] == 0
     hk = [l for l in lignes if l["instrument"] == "HK50"]
     assert hk[0]["premier_jour_minutes"] == "2015-02-10"
     assert us[2026]["seances_sondees"] == 10                        # le calendrier s'arrete au 30 octobre
