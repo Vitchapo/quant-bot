@@ -27,7 +27,6 @@ from quantbot import intraday_donnees as I  # noqa: E402
 from quantbot import tendance_donnees as TD  # noqa: E402
 
 T = pd.Timestamp
-VRAI_PROTOCOLE = Path(__file__).resolve().parent.parent / "docs" / "protocole_momentum_intrajournalier.md"
 JOURS = SY.seances("2017-12-28", "2019-12-31")
 DEBUTS = {"AUS200": "2019-02-08", "HK50": "2018-12-17"}         # comme chez FTMO
 
@@ -90,7 +89,7 @@ def _depot(tmp_path, barres, yahoo, mt5=None):
         lignes.append("| `%s` | `%s` | %s, source principale : retenu, aucun défaut |"
                       % (f.name, TD.sha256(f), n))
     (tmp_path / "tendance.md").write_text("\n".join(lignes) + "\n", encoding="utf-8")
-    (tmp_path / "protocole.md").write_bytes(VRAI_PROTOCOLE.read_bytes())
+    (tmp_path / "protocole.md").write_bytes(SY.PROTOCOLE.encode("utf-8"))
     p = dict(brut=tmp_path / "intraday" / "brut", manifeste=tmp_path / "intraday" / "manifeste.csv")
     S.telecharger(mt5 or FauxBarres(barres), dict(I.SYMBOLES), maintenant=T("2026-11-18 20:00", tz="UTC"),
                   attendre=lambda _: None, dire=lambda _: None, **p)

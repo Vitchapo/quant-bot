@@ -27,7 +27,6 @@ from quantbot import intraday_donnees as I  # noqa: E402
 from quantbot import tendance_donnees as TD  # noqa: E402
 
 T = pd.Timestamp
-VRAI_PROTOCOLE = Path(__file__).resolve().parent.parent / "docs" / "protocole_momentum_intrajournalier.md"
 TYPE_TICK = [("time", "<i8"), ("bid", "<f8"), ("ask", "<f8"), ("last", "<f8"), ("volume", "<u8"),
              ("time_msc", "<i8"), ("flags", "<u4"), ("volume_real", "<f8")]
 TRANSACTIONS = {"US500": 0.00008102, "GER40": 0.00004773, "UK100": 0.00007015, "JP225": 0.00018706,
@@ -214,7 +213,7 @@ def test_le_fichier_des_couts_donne_les_fractions_que_lira_le_test(tmp_path):
 
 
 def test_le_protocole_recoit_le_tableau_avant_la_periode_et_la_date_de_l_etape_1():
-    texte = VRAI_PROTOCOLE.read_text(encoding="utf-8")
+    texte = SY.PROTOCOLE
     bloc = S.bloc_protocole(_res(), "18 novembre 2026")
     neuf = S.consigner(texte, bloc, "18 novembre 2026")
     avant, apres = neuf.split(S.ENTETE)
@@ -232,7 +231,7 @@ def test_le_protocole_recoit_le_tableau_avant_la_periode_et_la_date_de_l_etape_1
 
 
 def test_le_protocole_garde_ses_fins_de_ligne_windows():
-    texte = VRAI_PROTOCOLE.read_text(encoding="utf-8").replace("\n", "\r\n")
+    texte = SY.PROTOCOLE.replace("\n", "\r\n")
     neuf = S.consigner(texte, S.bloc_protocole(_res(), "18 novembre 2026"), "18 novembre 2026")
     assert neuf.count("\r\n") == neuf.count("\n")
 
@@ -253,7 +252,7 @@ def _depot(tmp_path, abime=None):
     couts.write_text("instrument,transaction,marge_achat,marge_vente\n"
                      + "".join("%s,%.8f,0.05,0.04\n" % (n, v) for n, v in TRANSACTIONS.items()), encoding="utf-8")
     protocole = tmp_path / "protocole.md"
-    protocole.write_bytes(VRAI_PROTOCOLE.read_bytes())
+    protocole.write_bytes(SY.PROTOCOLE.encode("utf-8"))
     return dict(protocole=protocole, tendance=tmp_path / "tendance.md", brut=brut, couts=couts)
 
 

@@ -21,6 +21,56 @@ import pandas as pd
 
 from quantbot import intraday_donnees as I
 
+#: Un protocole aux cases encore vides, fait des passages dont les scripts des
+#: etapes 1 et 2 ont besoin (copies du protocole tel que commite le
+#: 18/11/2026, 444c403). Les tests n'utilisent pas le vrai protocole : ses
+#: cases se remplissent au fil des etapes.
+PROTOCOLE = """# Protocole fabrique pour les tests
+
+## Ce qui est fig\u00e9
+
+### Les donn\u00e9es
+
+- **Calendrier des s\u00e9ances :** les jours de cotation de chaque indice dans ses
+  cours quotidiens du protocole de tendance (fichiers bruts scell\u00e9s \u00e0 son
+  \u00e9tape 2, `5f3e492`), jusqu'au 30 octobre 2026. Un jour o\u00f9 le march\u00e9 au
+  comptant est ferm\u00e9 n'est jamais une s\u00e9ance, m\u00eame si le CFD cote.
+
+### La fen\u00eatre et la position
+
+La position ne d\u00e9pend que du calendrier et de cours d\u00e9j\u00e0 connus \u00e0 l'entr\u00e9e.
+
+### Les co\u00fbts FTMO
+
+Aucune commission sur les indices FTMO (tableau des co\u00fbts du protocole de
+tendance), et aucun swap : la position la plus tardive, US500, est ferm\u00e9e \u00e0
+23:00 heure du serveur, avant le passage de minuit.
+
+### La p\u00e9riode
+
+- Rendements jug\u00e9s : **avril 2018 \u00e0 octobre 2026**.
+
+---
+
+## Les cinq crit\u00e8res, au seuil t > 2,5
+
+| # | crit\u00e8re | mesure | seuil | r\u00e9sultat |
+|---|---|---|---|---|
+| 1 | l'effet existe | r\u00e9gression | pente > 0, t > 2,5 | |
+
+## \u00c9tapes
+
+| # | \u00e9tape | fait le |
+|---|---|---|
+| 0 | relire, valider, committer et pousser ce protocole | |
+| 1 | co\u00fbts : relever les spreads FTMO aux heures exactes d'entr\u00e9e et de sortie (historique de ticks), \
+consigner le tableau, committer | |
+| 2 | donn\u00e9es : t\u00e9l\u00e9charger une fois les barres de 30 minutes, contr\u00f4ler (heure du serveur, barres \
+manquantes, cours fig\u00e9s, sauts), consigner empreintes et exclusions, committer | |
+| 5 | appliquer la d\u00e9cision | |
+"""
+
+
 TYPE_BARRE = [("time", "<i8"), ("open", "<f8"), ("high", "<f8"), ("low", "<f8"), ("close", "<f8"),
               ("tick_volume", "<u8"), ("spread", "<i4"), ("real_volume", "<u8")]
 PAR_JOUR = 20                      # de 8:00 a 18:00, heure locale
